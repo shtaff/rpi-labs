@@ -5,6 +5,7 @@
 #   ./tools/flash.sh buildroot            # Buildroot sdcard.img
 #   ./tools/flash.sh yocto                # Yocto .wic.xz (uses bmaptool + .bmap if available)
 #   ./tools/flash.sh path/to/image.img    # any .img / .wic / .img.xz / .wic.xz
+#   ./tools/flash.sh --inspect            # write nothing: show how far the Pi got booting this card
 #
 # Options:
 #   --busid 2-3        USB bus id of the card reader (skip the picker)
@@ -25,16 +26,17 @@ USBIPD="${USBIPD:-/mnt/c/Program Files/usbipd-win/usbipd.exe}"
 POWERSHELL="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 MAX_SIZE_GB=256          # refuse bigger disks: an SD card is never a 2 TB drive
 
-IMAGE_ARG="" BUSID="" DEVICE="" KEEP=0 VERIFY=1 DRY=0 YES=0
+IMAGE_ARG="" BUSID="" DEVICE="" KEEP=0 VERIFY=1 DRY=0 YES=0 INSPECT=0
 while (( $# )); do
     case "$1" in
+        --inspect) INSPECT=1 ;;
         --busid)  BUSID="$2"; shift ;;
         --device) DEVICE="$2"; shift ;;
         --keep-attached) KEEP=1 ;;
         --no-verify) VERIFY=0 ;;
         --dry-run) DRY=1 ;;
         --yes) YES=1 ;;
-        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
         -*) die "Unknown option $1" ;;
         *) IMAGE_ARG="$1" ;;
     esac
@@ -302,8 +304,78 @@ verify_card() {
     rmdir "$mnt"
 }
 
+# --------------------------------------------------------------- inspect --
+# Read-only: after the card has been in the Pi, show how far the Pi got.
+# Each boot stage leaves a trace on the card:
+#   ext4 mount count > 0     kernel booted, init remounted / read-write
+#   partition 2 fills card   first-boot resize (S05 / rootfs-expand.service) ran
+#   /etc/rootfs-expanded     ...and finished
+#   /etc/ssh/ssh_host_*      sshd started (Buildroot: after S40network / S45wifi)
+#   boot-report.txt          Buildroot S99boot-report ran (60 s after boot)
+inspect_card() {
+    sudo partprobe "$DEVICE" 2>/dev/null || sudo blockdev --rereadpt "$DEVICE" 2>/dev/null || true
+    sleep 1
+    echo; lsblk -o NAME,SIZE,FSTYPE,LABEL "$DEVICE"; echo
+
+    local p1 p2 mnt disk_b p2_b count state
+    p1="$(lsblk -nro PATH "$DEVICE" | sed -n 2p)"; p2="$(lsblk -nro PATH "$DEVICE" | sed -n 3p)"
+    [[ -n "$p2" ]] || die "No second partition on $DEVICE: is this a card flashed with our image?"
+
+    count="$(sudo tune2fs -l "$p2" 2>/dev/null | sed -n 's/^Mount count: *//p')"
+    state="$(sudo tune2fs -l "$p2" 2>/dev/null | sed -n 's/^Filesystem state: *//p')"
+    if [[ "${count:-0}" -gt 0 ]]; then
+        ok "Linux booted: root filesystem was mounted read-write $count time(s) (state: $state)"
+    else
+        warn "Root filesystem was NEVER mounted read-write: the Pi did not boot Linux from this card"
+        warn "  -> bootloader / kernel stage. Check the Pi's LEDs and HDMI output (see README troubleshooting)."
+    fi
+
+    disk_b="$(lsblk -bdno SIZE "$DEVICE")"; p2_b="$(lsblk -bno SIZE "$p2")"
+    if (( p2_b > disk_b * 8 / 10 )); then
+        ok "First-boot resize ran: root partition is $(numfmt --to=iec "$p2_b") of $(numfmt --to=iec "$disk_b")"
+    else
+        warn "Root partition still $(numfmt --to=iec "$p2_b") of $(numfmt --to=iec "$disk_b"): first-boot resize did not run"
+    fi
+
+    mnt="$(mktemp -d)"
+    # Plain ro mount: if the Pi lost power, the kernel replays the ext4 journal
+    # first, exactly as the Pi would on its next boot.
+    if sudo mount -o ro "$p2" "$mnt"; then
+        [[ -e "$mnt/etc/rootfs-expanded" ]] && ok "/etc/rootfs-expanded exists: resize finished" \
+            || warn "/etc/rootfs-expanded missing: resize never finished"
+        if compgen -G "$mnt/etc/ssh/ssh_host_*_key" >/dev/null; then
+            ok "SSH host keys exist: boot reached sshd (after network setup)"
+        else
+            warn "No SSH host keys: boot never reached sshd"
+        fi
+        [[ -f "$mnt/var/lib/chrony/drift" ]] && ok "chrony drift file exists: NTP synced at some point"
+        sudo umount "$mnt"
+    else
+        warn "Could not mount $p2"
+    fi
+
+    if [[ -n "$p1" ]] && sudo mount -o ro "$p1" "$mnt"; then
+        if [[ -f "$mnt/boot-report.txt" ]]; then
+            ok "boot-report.txt found:"; echo; cat "$mnt/boot-report.txt"
+        else
+            warn "No boot-report.txt on the boot partition (S99boot-report never ran, or the image predates it)"
+        fi
+        sudo umount "$mnt"
+    fi
+    rmdir "$mnt"
+}
+
 # ------------------------------------------------------------------ main --
 sanitize_path
+if (( INSPECT )); then
+    if is_wsl && [[ -z "$DEVICE" ]]; then
+        wsl_attach_reader
+        trap 'wsl_detach_reader' EXIT
+    fi
+    find_device
+    inspect_card
+    exit 0
+fi
 for t in lsblk sudo dd cmp xz numfmt partprobe; do
     command -v "$t" >/dev/null || warn "Missing '$t' (sudo apt install util-linux coreutils diffutils xz-utils parted)"
 done
