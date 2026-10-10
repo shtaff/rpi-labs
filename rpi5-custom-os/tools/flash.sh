@@ -273,11 +273,25 @@ verify_card() {
             warn "rootfs: your current key ($SSH_PUBKEY) is NOT in the image"
         fi
         [[ -n "$(sudo find "$mnt/usr/sbin" -name sshd -print -quit 2>/dev/null)" ]] && ok "rootfs: sshd present"
-        ok "rootfs: hostname $(sudo cat "$mnt/etc/hostname" 2>/dev/null || echo '?')"
-        local wpa
+        local host
+        host="$(sudo cat "$mnt/etc/hostname" 2>/dev/null || echo '?')"
+        if [[ "$host" == "$RPI_HOSTNAME" ]]; then
+            ok "rootfs: hostname $host"
+        else
+            warn "rootfs: hostname is '$host' but config says '$RPI_HOSTNAME' — image built with different settings (config.local.env missing on the build machine?)"
+        fi
+        local wpa ssid
         wpa="$(sudo find "$mnt/etc/wpa_supplicant.conf" "$mnt/etc/wpa_supplicant/wpa_supplicant-nl80211-wlan0.conf" 2>/dev/null | head -1 || true)"
         if [[ -n "$wpa" ]]; then
-            ok "rootfs: Wi-Fi config ${wpa#"$mnt"} (network: $(sudo sed -n 's/^ *# ssid: //p' "$wpa" | head -1 | grep . || echo none))"
+            # br.sh writes "# ssid: <name>" (+ hex ssid=), quick-build.sh writes ssid="<name>".
+            ssid="$(sudo sed -n -e 's/^ *# ssid: //p' -e 's/^ *ssid="\(.*\)"$/\1/p' "$wpa" | head -1 || true)"
+            if [[ -z "$ssid" ]]; then
+                warn "rootfs: Wi-Fi config ${wpa#"$mnt"} has NO network${WIFI_SSID:+ (config says '$WIFI_SSID')}"
+            elif [[ -n "$WIFI_SSID" && "$ssid" != "$WIFI_SSID" ]]; then
+                warn "rootfs: Wi-Fi network is '$ssid' but config says '$WIFI_SSID'"
+            else
+                ok "rootfs: Wi-Fi config ${wpa#"$mnt"} (network: $ssid)"
+            fi
         else
             warn "rootfs: no wpa_supplicant config found"
         fi

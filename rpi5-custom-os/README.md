@@ -261,6 +261,8 @@ Sample of what to hand in as the result: the `PASS` output of `verify-ssh.sh`, p
 | Rainbow screen / no boot | Bad flash or old Pi 5 bootloader EEPROM. Re-flash; update the EEPROM once with Raspberry Pi OS. |
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | Every rebuild creates new host keys. `verify-ssh.sh` uses its own `~/rpi5-os/known_hosts`; for plain `ssh` run `ssh-keygen -R <pi-ip>`. |
 | `Permission denied (publickey)` | Key mismatch: the image has the key from `SSH_PUBKEY` at configure time. Re-run `configure` + `build` after changing keys. |
+| Pi not reachable at all, no screen (Buildroot) | Leave it powered for 2 minutes, then put the SD card in your PC and open `boot-report.txt` on the boot drive. It shows IP addresses, link state (`carrier=1` = cable link), DHCP and Wi-Fi status, and the relevant kernel and syslog lines. |
+| `flash.sh`: "hostname is 'X' but config says 'Y'" | The image was built with different settings, usually because `config.local.env` is git-ignored and wasn't copied to the WSL folder you built from. Copy it, then rebuild. |
 | No `wlan0` | `dmesg \| grep brcmfmac`. "firmware load failed": firmware missing from `/lib/firmware/brcm`. No output at all: driver not loaded, try `modprobe brcmfmac`. |
 | `wlan0` exists but doesn't connect | `wpa_cli -i wlan0 status` (look at `wpa_state`), `iw dev wlan0 link`, `wpa_cli -i wlan0 scan; wpa_cli -i wlan0 scan_results` to see if the SSID is visible. Common causes: wrong passphrase, 5 GHz channel blocked because `WIFI_COUNTRY` is unset, WPA3-only access point. |
 | Wi-Fi connected but no IP | Buildroot: `ps \| grep udhcpc`, `/etc/init.d/S45wifi restart`. Yocto: `networkctl status wlan0`, `journalctl -u systemd-networkd`. |

@@ -25,6 +25,7 @@ One script drives everything: [`br.sh`](br.sh). This document explains every fil
 | [`board/overlay/etc/motd`](board/overlay/etc/motd) | "Message of the day", shown after you log in. | Confirms you're on *your* image and lists useful commands. |
 | [`board/overlay/etc/chrony.conf`](board/overlay/etc/chrony.conf) | Config for `chronyd`, the NTP client. | Replaces the package's example config: it uses `pool.ntp.org`, **jumps** the clock on the first sync (the Pi boots with a wrong date) and keeps the RTC in sync. |
 | [`board/overlay/etc/init.d/S05rootfs-expand`](board/overlay/etc/init.d/S05rootfs-expand) | Boot script, runs early. | On the first boot it runs `/usr/sbin/rootfs-expand` to grow `/` to the size of the card. Afterwards it does nothing. |
+| [`board/overlay/etc/init.d/S99boot-report`](board/overlay/etc/init.d/S99boot-report) | Boot script, runs last. | Diagnostics when the Pi isn't reachable. About 60 s after boot it writes `boot-report.txt` (IP addresses, routes, link state, Wi-Fi status, modules, firmware, kernel and syslog lines) to the FAT boot partition. Put the card in any PC and open it. |
 | [`board/overlay/etc/init.d/S45wifi`](board/overlay/etc/init.d/S45wifi) | Boot script, runs after Ethernet is up. | Loads the Wi-Fi driver if needed, waits for `wlan0`, starts `wpa_supplicant`, then `udhcpc` for an IP address. Also takes `stop` and `restart`. |
 | [`quick-build.sh`](quick-build.sh) | The whole flow (deps → fetch → configure → build → export) as one top-to-bottom script, one comment per line, no checks. | A quick read of the whole flow, or a one-command build. Builds the same image as `br.sh`. Its config fragment is a copy of the one in `br.sh`: keep the two in sync. |
 | `README.md` | This document. | |
@@ -226,6 +227,7 @@ Deletes `br-output/`. Downloads (`br-dl/`) and the compiler cache (`br-ccache/`)
 | `S49chronyd` | chrony | Starts NTP. On the first good server response the clock jumps to the correct time (`makestep`). |
 | `S50avahi-daemon` | avahi | Announces `mylab-rpi5.local` and the SSH service. |
 | `S50sshd` | OpenSSH | First boot: creates host keys in `/etc/ssh/`. Then starts `sshd` on port 22. |
+| **`S99boot-report`** | our overlay | 60 s later, in the background: writes `boot-report.txt` to the boot partition (see the file table). |
 
 4. **Login prompts**: on the serial console (Pi 5 UART connector, 115200 baud) and on HDMI (`tty1`).
 

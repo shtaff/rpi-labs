@@ -5,7 +5,8 @@
 set -euo pipefail                                                   # stop on the first error
 cd "$(dirname "$0")/.." && REPO="$(pwd)"                            # work from the repo root
 source config.env                                                   # shared defaults
-if [ -f config.local.env ]; then source config.local.env; fi        # your overrides (Wi-Fi etc.)
+if [ -f config.local.env ]; then source config.local.env; else echo "WARNING: no config.local.env in $REPO - building with defaults, no Wi-Fi"; fi
+echo "Settings: hostname=$RPI_HOSTNAME wifi=${WIFI_SSID:-none} country=${WIFI_COUNTRY:-none} root-password-ssh=$ALLOW_ROOT_PASSWORD_SSH"   # check before a long build
 
 # ---- Host setup ------------------------------------------------------------
 WIN_USER="$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r' || true)"   # Windows user, for the export at the end
@@ -13,7 +14,7 @@ PATH="$(tr ':' '\n' <<<"$PATH" | grep -v -e '^/mnt/' -e ' ' | paste -sd:)"    # 
 sudo apt-get update                                                 # refresh package lists
 sudo apt-get install -y build-essential chrpath cpio debianutils diffstat file gawk gcc git \
     iputils-ping libacl1 lz4 locales python3 python3-git python3-jinja2 python3-pexpect \
-    python3-pip python3-subunit socat texinfo unzip wget xz-utils zstd openssl openssh-client   # Yocto host tools
+    python3-pip python3-subunit socat texinfo unzip wget xz-utils zstd openssl openssh-client bmap-tools parted   # Yocto host tools + what flash.sh uses
 sudo locale-gen en_US.UTF-8                                         # bitbake requires a UTF-8 locale
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8                          # ...and uses it
 
@@ -56,7 +57,7 @@ EOF
 # Wi-Fi network block: assumes a WPA2 network and an SSID without quote characters.
 if [ -n "$WIFI_SSID" ]; then
     PSK="$(python3 -c 'import hashlib,sys; print(hashlib.pbkdf2_hmac("sha1", sys.argv[1].encode(), sys.argv[2].encode(), 4096, 32).hex())' "$WIFI_PSK" "$WIFI_SSID")"  # same as wpa_passphrase
-    printf 'network={\n    ssid="%s"\n    psk=%s\n}\n' "$WIFI_SSID" "$PSK" >> "$WPA"
+    printf 'network={\n    # ssid: %s\n    ssid="%s"\n    psk=%s\n}\n' "$WIFI_SSID" "$WIFI_SSID" "$PSK" >> "$WPA"
 fi
 chmod 600 "$WPA"                                                    # holds the network key
 

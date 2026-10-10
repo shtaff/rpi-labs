@@ -1,0 +1,45 @@
+#!/bin/sh
+# Headless diagnostics. ~60 s after boot, write the network / Wi-Fi state to
+# boot-report.txt on the FAT boot partition: put the SD card in any PC (even
+# Windows, no tools needed) and read it. Overwritten on every boot.
+
+REPORT=boot-report.txt
+BOOT_DEV=/dev/mmcblk0p1          # SD card partition 1 (FAT boot)
+
+collect() {
+	echo "=== boot report $(date) - uptime $(cut -d' ' -f1 /proc/uptime)s - $(hostname)"
+	echo; echo "--- ip addr";  ip addr
+	echo; echo "--- ip route"; ip route
+	echo; echo "--- link state (carrier 1 = cable/link up)"
+	for n in /sys/class/net/*; do
+		echo "$(basename "$n"): operstate=$(cat "$n/operstate") carrier=$(cat "$n/carrier" 2>/dev/null) speed=$(cat "$n/speed" 2>/dev/null)"
+	done
+	echo; echo "--- /etc/network/interfaces"; cat /etc/network/interfaces
+	echo; echo "--- /etc/resolv.conf"; cat /etc/resolv.conf
+	echo; echo "--- wpa_cli status"; wpa_cli -i wlan0 status
+	echo; echo "--- wpa_supplicant.conf (psk hidden)"; sed 's/^\( *psk=\).*/\1<hidden>/' /etc/wpa_supplicant.conf
+	echo; echo "--- DHCP / Wi-Fi / NTP / mDNS processes"; ps | grep -E 'udhcpc|wpa_supp|chronyd|avahi|sshd' | grep -v grep
+	echo; echo "--- lsmod"; lsmod
+	echo; echo "--- Wi-Fi firmware"; ls -l /lib/firmware/brcm/brcmfmac43455* /lib/firmware/cypress/cyfmac43455* 2>&1
+	echo; echo "--- dmesg: network, Wi-Fi, firmware"
+	dmesg | grep -iE 'brcm|macb|eth0|wlan|firmware|rp1|link|cfg80211|mmc1'
+	echo; echo "--- syslog (last 150 lines)"; tail -n 150 /var/log/messages
+	echo; echo "--- first-boot resize log"; cat /var/log/rootfs-expand.log 2>&1
+}
+
+case "$1" in
+	start)
+		echo "Boot report: in 60 s to $REPORT on the boot partition"
+		(
+			sleep 60
+			mkdir -p /mnt/bootfs
+			if mount -t vfat "$BOOT_DEV" /mnt/bootfs; then
+				collect > "/mnt/bootfs/$REPORT" 2>&1
+				sync
+				umount /mnt/bootfs
+			fi
+		) >/dev/null 2>&1 &
+		;;
+	stop|restart|reload) ;;
+	*) echo "Usage: $0 {start}"; exit 1 ;;
+esac

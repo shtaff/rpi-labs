@@ -16,6 +16,7 @@ chmod 0600 "$TARGET_DIR/etc/wpa_supplicant.conf"
 
 # First-boot resize: same exec-bit caveat. The marker must not be in the image.
 chmod 0755 "$TARGET_DIR/etc/init.d/S05rootfs-expand" "$TARGET_DIR/usr/sbin/rootfs-expand"
+chmod 0755 "$TARGET_DIR/etc/init.d/S99boot-report"
 rm -f "$TARGET_DIR/etc/rootfs-expanded"
 
 # chronyd writes its drift file here but doesn't create the directory.
