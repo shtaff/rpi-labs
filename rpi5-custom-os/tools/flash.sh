@@ -158,6 +158,11 @@ candidates() {
 }
 
 find_device() {
+    pick_device
+    [[ -z "$DEVICE" || "$DEVICE" == /dev/* ]] || DEVICE="/dev/$DEVICE"   # accept "sdf" as well as "/dev/sdf"
+}
+
+pick_device() {
     if [[ -n "$DEVICE" ]]; then return; fi
     local list=""
     for _ in $(seq 1 20); do                   # the kernel needs a moment to enumerate
@@ -313,6 +318,8 @@ verify_card() {
 #   /etc/ssh/ssh_host_*      sshd started (Buildroot: after S40network / S45wifi)
 #   boot-report.txt          Buildroot S99boot-report ran (60 s after boot)
 inspect_card() {
+    [[ -b "$DEVICE" ]] || die "$DEVICE is not a block device (lsblk shows what's attached)"
+    [[ "$(lsblk -dno TYPE "$DEVICE")" == disk ]] || die "$DEVICE is a partition — pass the whole card, e.g. /dev/sdf"
     sudo partprobe "$DEVICE" 2>/dev/null || sudo blockdev --rereadpt "$DEVICE" 2>/dev/null || true
     sleep 1
     echo; lsblk -o NAME,SIZE,FSTYPE,LABEL "$DEVICE"; echo
@@ -355,6 +362,12 @@ inspect_card() {
     fi
 
     if [[ -n "$p1" ]] && sudo mount -o ro "$p1" "$mnt"; then
+        if [[ "${count:-0}" -eq 0 ]]; then
+            # Linux never got going: show what the bootloader had to work with.
+            log "Boot partition files:"; ls -la "$mnt" | sed 's/^/    /'
+            log "config.txt:"; grep -v '^\s*#' "$mnt/config.txt" | grep . | sed 's/^/    /' || true
+            log "cmdline.txt:"; sed 's/^/    /' "$mnt/cmdline.txt" || true
+        fi
         if [[ -f "$mnt/boot-report.txt" ]]; then
             ok "boot-report.txt found:"; echo; cat "$mnt/boot-report.txt"
         else
