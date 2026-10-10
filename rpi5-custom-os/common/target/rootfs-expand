@@ -1,0 +1,38 @@
+#!/bin/sh
+# Grow the root partition and its ext4 filesystem to the end of the disk.
+# Runs once on first boot (Buildroot: /etc/init.d/S05rootfs-expand,
+# Yocto: rootfs-expand.service), then leaves a marker so it is skipped later.
+#
+# Works while / is mounted, no reboot: sfdisk rewrites only the partition's
+# end, `partx -u` tells the kernel the new size (BLKPG, works on a disk in
+# use, unlike a full partition-table re-read), resize2fs grows ext4 online.
+# Safe to re-run: if the partition already ends at the disk's end, nothing changes.
+set -eu
+
+MARKER=/etc/rootfs-expanded
+[ -e "$MARKER" ] && exit 0
+
+# Which block device is mounted on /? mountinfo field 3 is its major:minor,
+# which avoids depending on /dev/root, findmnt or lsblk.
+majmin=$(awk '$5 == "/" { print $3; exit }' /proc/self/mountinfo)
+sys=$(readlink -f "/sys/dev/block/$majmin")      # .../block/mmcblk0/mmcblk0p2
+[ -f "$sys/partition" ] || { echo "rootfs-expand: / ($majmin) is not a partition, nothing to do"; exit 0; }
+
+part=/dev/$(basename "$sys")                     # /dev/mmcblk0p2
+disk=/dev/$(basename "$(dirname "$sys")")        # /dev/mmcblk0
+num=$(cat "$sys/partition")                      # 2
+
+# Only the last partition can grow into free space.
+last=$(for p in "$(dirname "$sys")"/*/partition; do cat "$p"; done | sort -n | tail -1)
+[ "$num" = "$last" ] || { echo "rootfs-expand: $part is not the last partition, skipping"; exit 0; }
+
+before=$(df -h / | awk 'NR == 2 { print $2 }')
+echo "rootfs-expand: growing $part (partition $num of $disk) to the end of the disk"
+# ", +" = keep the start, extend to the maximum size. --no-reread: the disk is
+# in use, we update the kernel's view with partx below instead.
+echo ", +" | sfdisk --quiet --no-reread --no-tell-kernel -N "$num" "$disk"
+partx -u -n "$num" "$disk"
+resize2fs "$part"
+sync
+touch "$MARKER"
+echo "rootfs-expand: / grew from $before to $(df -h / | awk 'NR == 2 { print $2 }')"

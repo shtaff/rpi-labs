@@ -1,0 +1,13 @@
+[Unit]
+Description=Grow the root partition and filesystem to fill the SD card (first boot)
+ConditionPathExists=!/etc/rootfs-expanded
+# / must be read-write before we resize it.
+After=systemd-remount-fs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rootfs-expand
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# systemd-networkd: DHCP on Wi-Fi once wpa_supplicant has associated.
+# Ethernet is handled by oe-core's 80-wired.network.
+[Match]
+Name=wlan0
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+# Wired routes use the default metric 1024; prefer Ethernet when both are up.
+RouteMetric=2048
+
+[IPv6AcceptRA]
+RouteMetric=2048

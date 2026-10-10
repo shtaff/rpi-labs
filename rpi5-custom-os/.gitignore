@@ -1,0 +1,8 @@
+# Personal settings and secrets (Wi-Fi passphrase, ...)
+config.local.env
+
+# Generated at configure time; never commit (Wi-Fi PSK, your public key)
+yocto/meta-mylab/recipes-mylab/wifi-config/files/wpa_supplicant-*.conf
+yocto/meta-mylab/recipes-mylab/ssh-root-key/files/
+# Copied in from common/target/ by yocto.sh configure
+yocto/meta-mylab/recipes-mylab/rootfs-expand/files/rootfs-expand

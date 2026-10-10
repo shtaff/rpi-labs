@@ -1,0 +1,5 @@
+
+  MyLab Raspberry Pi 5 — custom Buildroot image
+  SSH is up. Try: uname -a ; cat /etc/os-release ; ip addr
+  Wi-Fi status:   wpa_cli -i wlan0 status ; iw dev wlan0 link
+
