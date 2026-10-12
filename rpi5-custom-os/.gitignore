@@ -6,3 +6,10 @@ yocto/meta-mylab/recipes-mylab/wifi-config/files/wpa_supplicant-*.conf
 yocto/meta-mylab/recipes-mylab/ssh-root-key/files/
 # Copied in from common/target/ by yocto.sh configure
 yocto/meta-mylab/recipes-mylab/rootfs-expand/files/rootfs-expand
+# Copied in from ros2_ws/src/ by yocto.sh configure
+yocto/meta-mylab-ros/recipes-ros/counter-demo/files/counter_demo/
+
+# colcon output (tools/ros2.sh build)
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/

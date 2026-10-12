@@ -1,0 +1,20 @@
+[Unit]
+Description=ROS 2 counter demo (counter_publisher + counter_subscriber)
+After=network.target
+
+[Service]
+# ros2 launch needs the ROS environment that setup.sh exports.
+ExecStart=/bin/sh -c '. /opt/ros/@ROS_DISTRO@/setup.sh && exec ros2 launch counter_demo counter.launch.py'
+# A system service has no HOME: tell ROS where its state and logs go.
+Environment=ROS_HOME=/var/lib/ros
+Environment=ROS_LOG_DIR=/var/log/ros
+# Plain, line-by-line output for the journal: journalctl -u counter-demo -f
+Environment=PYTHONUNBUFFERED=1
+Environment=RCUTILS_COLORIZED_OUTPUT=0
+# ros2 launch shuts its nodes down cleanly on Ctrl+C, i.e. SIGINT.
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

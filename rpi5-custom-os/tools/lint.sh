@@ -68,7 +68,7 @@ grep -qx 'country=US' "$tmp/wpa.conf"       || fail "make_wifi_conf: country not
 rm -rf "$tmp"
 
 log "yocto/layers.lock"
-for name in bitbake openembedded-core meta-yocto meta-raspberrypi; do
+for name in bitbake openembedded-core meta-yocto meta-raspberrypi meta-openembedded meta-ros; do
     awk -v n="$name" '$1 == n && $2 ~ /^[0-9a-f]{40}$/ { found = 1 } END { exit !found }' yocto/layers.lock \
         || fail "layers.lock: no 40-hex commit for $name"
 done

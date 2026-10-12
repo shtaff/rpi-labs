@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>counter_demo</name>
+  <version>1.0.0</version>
+  <description>
+    Two ROS 2 nodes talking over one topic: counter_publisher sends 1, 2, 3...
+    on /counter, counter_subscriber prints them. The /counter/enable service
+    (std_srvs/SetBool) starts and stops the count; counter_control calls it.
+  </description>
+  <maintainer email="ua.shtaff@gmail.com">Volodymyr</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

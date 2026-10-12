@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Yocto (wrynose / 6.0) flow for Raspberry Pi 5 with OpenSSH and Wi-Fi.
+# Yocto (wrynose / 6.0) flow for Raspberry Pi 5 with OpenSSH, Wi-Fi and ROS 2.
 #
 #   ./yocto/yocto.sh all          # fetch -> configure -> build -> export
 #   ./yocto/yocto.sh <step>       # deps | fetch | lock | update | configure | build | shell | export | clean
@@ -8,7 +8,7 @@
 # update moves to the branch tips and rewrites the lock file.
 #
 # Analogy: Yocto is a restaurant kitchen: many layers of recipes (oe-core, poky,
-# meta-raspberrypi, ours), a scheduler (bitbake) running every task as a job,
+# meta-raspberrypi, meta-ros, ours), a scheduler (bitbake) running every task as a job,
 # and a pantry of pre-cooked results (sstate-cache) so rebuilds are fast.
 # More setup, far more control — and far more RAM and disk.
 
@@ -17,6 +17,8 @@ source "$(dirname "$0")/../common/lib.sh"
 Y="$WORK_DIR/yocto"
 BUILD="$Y/build"
 LAYER_SRC="$REPO_ROOT/yocto/meta-mylab"
+ROS_LAYER_SRC="$REPO_ROOT/yocto/meta-mylab-ros"
+ROS_PKG_SRC="$REPO_ROOT/ros2_ws/src/counter_demo"   # built into the image by counter-demo.bb
 MACHINE="raspberrypi5"
 IMAGE="mylab-image"
 
@@ -33,7 +35,7 @@ step_deps() {
 }
 
 yocto_preflight() {
-    preflight 120 16
+    preflight 150 16      # ROS 2 adds ~30 GB to the build
     [[ $EUID -ne 0 ]] || die "Do not build Yocto as root (bitbake refuses)."
     # Ubuntu 24.04+ blocks unprivileged user namespaces, which bitbake uses to
     # cut tasks off from the network. Usually off in WSL, but check anyway.
@@ -51,6 +53,8 @@ LAYERS=(
     "openembedded-core https://git.openembedded.org/openembedded-core https://github.com/openembedded/openembedded-core $YOCTO_RELEASE"
     "meta-yocto        https://git.yoctoproject.org/meta-yocto        https://github.com/yoctoproject/meta-yocto        $YOCTO_RELEASE"
     "meta-raspberrypi  https://git.yoctoproject.org/meta-raspberrypi  https://github.com/agherzan/meta-raspberrypi      $YOCTO_RELEASE"
+    "meta-openembedded https://git.openembedded.org/meta-openembedded https://github.com/openembedded/meta-openembedded $YOCTO_RELEASE"
+    "meta-ros          https://github.com/ros/meta-ros                https://github.com/ros/meta-ros                   $YOCTO_RELEASE"
 )
 
 # Exact commit per layer, like package-lock.json: same lock file = same sources
@@ -109,6 +113,7 @@ step_fetch() {
         clone "$name" "$url" "$mirror" "$br"
     done
     [[ -f "$Y/meta-raspberrypi/conf/machine/$MACHINE.conf" ]] || die "No $MACHINE machine in meta-raspberrypi"
+    [[ -f "$Y/meta-ros/meta-ros2-$ROS2_DISTRO/conf/layer.conf" ]] || die "No ROS 2 $ROS2_DISTRO layer in meta-ros ($YOCTO_RELEASE)"
 }
 
 # Write the commits currently checked out into layers.lock.
@@ -153,6 +158,13 @@ step_configure() {
     make_wifi_conf "$Y/meta-mylab/recipes-mylab/wifi-config/files/wpa_supplicant-nl80211-wlan0.conf"
     install -m 0755 "$REPO_ROOT/common/target/rootfs-expand" "$Y/meta-mylab/recipes-mylab/rootfs-expand/files/"
 
+    log "Installing meta-mylab-ros layer (with ros2_ws/src/counter_demo)"
+    rm -rf "$Y/meta-mylab-ros"
+    cp -a "$ROS_LAYER_SRC" "$Y/meta-mylab-ros"
+    cp -a "$ROS_PKG_SRC" "$Y/meta-mylab-ros/recipes-ros/counter-demo/files/counter_demo"
+    # colcon output, if you built on this machine too, is not part of the source.
+    rm -rf "$Y/meta-mylab-ros/recipes-ros/counter-demo/files/counter_demo/"{build,install,log}
+
     mkdir -p "$BUILD/conf"
     log "Writing $BUILD/conf/bblayers.conf"
     cat > "$BUILD/conf/bblayers.conf" <<EOF
@@ -165,7 +177,14 @@ BBLAYERS ?= " \\
   $Y/openembedded-core/meta \\
   $Y/meta-yocto/meta-poky \\
   $Y/meta-raspberrypi \\
+  $Y/meta-openembedded/meta-oe \\
+  $Y/meta-openembedded/meta-python \\
+  $Y/meta-openembedded/meta-networking \\
+  $Y/meta-ros/meta-ros-common \\
+  $Y/meta-ros/meta-ros2 \\
+  $Y/meta-ros/meta-ros2-$ROS2_DISTRO \\
   $Y/meta-mylab \\
+  $Y/meta-mylab-ros \\
   "
 EOF
 
@@ -204,6 +223,12 @@ hostname:pn-base-files = "$RPI_HOSTNAME"
 MYLAB_ROOT_HASH = "$hash_bb"
 MYLAB_ALLOW_ROOT_PASSWORD_SSH = "$ALLOW_ROOT_PASSWORD_SSH"
 
+# ROS 2 ($ROS2_DISTRO) from meta-ros, added to the image by meta-mylab-ros.
+# meta-ros recipes carry licence names oe-core has no text for (e.g. "BSD"):
+# a warning instead of an error, as in meta-ros' own CI configuration.
+ERROR_QA:remove = "license-exists"
+WARN_QA:append = " license-exists"
+
 USER_CLASSES ?= "buildstats"
 PATCHRESOLVE = "noop"
 EOF
@@ -211,7 +236,7 @@ EOF
 
     log "Checking layer setup"
     with_env bitbake-layers show-layers
-    ok "Configured: MACHINE=$MACHINE, image=$IMAGE, hostname=$RPI_HOSTNAME"
+    ok "Configured: MACHINE=$MACHINE, image=$IMAGE, hostname=$RPI_HOSTNAME, ROS 2 $ROS2_DISTRO"
 }
 
 # Run a command inside the bitbake environment.
@@ -229,7 +254,7 @@ with_env() {
 step_build() {
     yocto_preflight
     [[ -f "$BUILD/conf/local.conf" ]] || step_configure
-    log "Building $IMAGE for $MACHINE ($JOBS threads). First build: 2-6 h, ~100 GB."
+    log "Building $IMAGE for $MACHINE ($JOBS threads). First build: 3-8 h, ~130 GB."
     local t0=$SECONDS
     with_env bitbake "$IMAGE"
     local img
@@ -252,6 +277,10 @@ step_build() {
         grep -q "^$pkg " "$manifest" || die "$pkg missing from the image"
     done
     ok "rootfs-expand and avahi-daemon in image (NTP: systemd-timesyncd)"
+    for pkg in ros-core ros2cli demo-nodes-cpp counter-demo ros2-profile; do
+        grep -q "^$pkg " "$manifest" || die "$pkg missing from the image"
+    done
+    ok "ROS 2 $ROS2_DISTRO in image: ros-core, ros2cli, demo-nodes-cpp, counter-demo, ros2-profile"
 }
 
 step_shell() {
@@ -273,6 +302,7 @@ Next:
      (or from Windows: Raspberry Pi Imager -> "Use custom" -> the .wic.xz)
   2. Ethernet (or Wi-Fi: ${WIFI_SSID:-not configured}) + power on, wait ~30 s (first boot generates SSH host keys).
   3. ./tools/verify-ssh.sh               (finds $RPI_HOSTNAME.local, else scans the LAN)
+  4. ./tools/ros2.sh pi                  (runs the ROS 2 counter check on the Pi over SSH)
 EOF
 }
 

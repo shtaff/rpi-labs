@@ -277,6 +277,11 @@ verify_card() {
             warn "rootfs: your current key ($SSH_PUBKEY) is NOT in the image"
         fi
         [[ -n "$(sudo find "$mnt/usr/sbin" -name sshd -print -quit 2>/dev/null)" ]] && ok "rootfs: sshd present"
+        if [[ -d "$mnt/opt/ros/$ROS2_DISTRO/lib/counter_demo" ]]; then
+            ok "rootfs: ROS 2 $ROS2_DISTRO with counter_demo in /opt/ros/$ROS2_DISTRO"
+        else
+            warn "rootfs: no /opt/ros/$ROS2_DISTRO/lib/counter_demo (image built without meta-mylab-ros?)"
+        fi
         local host
         host="$(sudo cat "$mnt/etc/hostname" 2>/dev/null || echo '?')"
         if [[ "$host" == "$RPI_HOSTNAME" ]]; then

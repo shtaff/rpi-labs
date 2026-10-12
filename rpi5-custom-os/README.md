@@ -1,6 +1,6 @@
-# Custom Raspberry Pi 5 OS with SSH and Wi-Fi — Yocto
+# Custom Raspberry Pi 5 OS with SSH, Wi-Fi and ROS 2 — Yocto
 
-Build a Linux image for the Raspberry Pi 5 with the Yocto Project on WSL2, flash it, and prove SSH works — over Ethernet or Wi-Fi.
+Build a Linux image for the Raspberry Pi 5 with the Yocto Project on WSL2, flash it, and prove SSH works — over Ethernet or Wi-Fi. The image includes **ROS 2 Jazzy** and our own `counter_demo` package: a publisher and a subscriber talking over one topic, plus a service that starts and stops the counter ([§4](#4-ros-2)).
 
 ```
 rpi5-custom-os/
@@ -14,16 +14,19 @@ rpi5-custom-os/
 │   ├── quick-build.sh          # the whole flow in one linear, commented script (no checks)
 │   ├── yocto.sh                # deps | fetch | lock | update | configure | build | shell | export | clean | all
 │   ├── layers.lock             # exact commit of every layer: same file = same image
-│   └── meta-mylab/             # our layer: image + authorized_keys + wifi-config + rootfs-expand recipes
+│   ├── meta-mylab/             # our layer: image + authorized_keys + wifi-config + rootfs-expand recipes
+│   └── meta-mylab-ros/         # our ROS 2 layer: adds ROS 2 + counter-demo to the image
+├── ros2_ws/src/counter_demo/   # ROS 2 package: publisher, subscriber, start/stop client, launch, self-check
 ├── tools/
 │   ├── flash.sh                # attach the card reader to WSL (usbipd), write, verify, detach
 │   ├── verify-ssh.sh           # find the Pi (mDNS or scan), log in with the key, check it's our OS
+│   ├── ros2.sh                 # ROS 2 on the PC: install, official demo, colcon build, check; and on the Pi
 │   └── lint.sh                 # static checks in seconds: shellcheck, line endings, exec bits, tests
 ├── .github/workflows/lint.yml  # runs lint.sh on every push
 └── .gitattributes              # forces LF line endings, even with core.autocrlf=true
 ```
 
-Versions pinned (checked 2026-10-10): **Yocto 6.0 "wrynose"** (bitbake 2.18, meta-raspberrypi `wrynose`, exact commits in `yocto/layers.lock`).
+Versions pinned (checked 2026-10-12): **Yocto 6.0 "wrynose"** (bitbake 2.18, meta-raspberrypi, meta-openembedded and meta-ros, all `wrynose`, exact commits in `yocto/layers.lock`), **ROS 2 Jazzy** (LTS, the release for Ubuntu 24.04).
 
 ---
 
@@ -37,7 +40,7 @@ Yocto is a restaurant kitchen: recipe books (**layers**), a head chef scheduling
 | "Add SSH" | `IMAGE_FEATURES += "ssh-server-openssh"` |
 | "Add Wi-Fi" | firmware + `wpa-supplicant` packages, our `wifi-config` recipe (systemd unit + networkd) |
 | Our customisation | our own **layer** `meta-mylab` with an image recipe and small config recipes |
-| First build | ~2–6 h, ~80–120 GB |
+| First build | ~3–8 h, ~130 GB (ROS 2 included) |
 | Output | `mylab-image-raspberrypi5.rootfs.wic.xz` |
 
 What ends up on the SD card: a FAT **boot** partition (Pi firmware, `config.txt`, kernel, device tree) and an ext4 **root** partition (your userspace). The Pi 5 boot ROM reads the first, the kernel mounts the second.
@@ -114,10 +117,10 @@ nano config.local.env    # Wi-Fi: WIFI_SSID, WIFI_COUNTRY (and WIFI_PSK, or be a
 
 | Step | What happens |
 |---|---|
-| `fetch` | Fetches bitbake 2.18, openembedded-core, meta-yocto (poky distro), meta-raspberrypi — all `wrynose` — into `~/rpi5-os/yocto/`, each at the exact commit in `yocto/layers.lock` (falls back to the GitHub mirrors if the primary server is down) |
+| `fetch` | Fetches bitbake 2.18, openembedded-core, meta-yocto (poky distro), meta-raspberrypi, meta-openembedded, meta-ros — all `wrynose` — into `~/rpi5-os/yocto/`, each at the exact commit in `yocto/layers.lock` (falls back to the GitHub mirrors if the primary server is down) |
 | `update` | Moves every layer to its branch tip and rewrites `layers.lock`. Do this on purpose, rebuild, test, then commit the lock file. `lock` alone just records what is checked out. |
-| `configure` | Copies `meta-mylab` in with your key and the generated Wi-Fi config, writes `build/conf/bblayers.conf` and `local.conf` (MACHINE, systemd, UART, hostname, password hash, caches), runs `bitbake-layers show-layers` |
-| `build` | `bitbake mylab-image`; checks the image manifest contains `openssh-sshd`, `ssh-root-key`, `wpa-supplicant`, `wifi-config`, the Wi-Fi firmware, `rootfs-expand` and `avahi-daemon` |
+| `configure` | Copies `meta-mylab` in with your key and the generated Wi-Fi config, and `meta-mylab-ros` with `ros2_ws/src/counter_demo`; writes `build/conf/bblayers.conf` and `local.conf` (MACHINE, systemd, UART, hostname, password hash, caches), runs `bitbake-layers show-layers` |
+| `build` | `bitbake mylab-image`; checks the image manifest contains `openssh-sshd`, `ssh-root-key`, `wpa-supplicant`, `wifi-config`, the Wi-Fi firmware, `rootfs-expand`, `avahi-daemon`, and `ros-core`, `ros2cli`, `demo-nodes-cpp`, `counter-demo`, `ros2-profile` |
 | `shell` | Drops you into a shell with `bitbake` on PATH, for exploring (`bitbake -e mylab-image \| less`, `bitbake -c menuconfig virtual/kernel`) |
 | `export` | Copies `.wic.xz` to Windows Downloads |
 
@@ -126,8 +129,9 @@ The layer, file by file:
 - `meta-mylab/recipes-mylab/ssh-root-key/ssh-root-key.bb` — tiny package that installs `${ROOT_HOME}/.ssh/authorized_keys` with mode 600.
 - `meta-mylab/recipes-mylab/wifi-config/wifi-config.bb` — installs the generated `wpa_supplicant-nl80211-wlan0.conf` (mode 600) and `30-wlan.network`, and enables `wpa_supplicant-nl80211@wlan0.service`. The image also adds `linux-firmware-rpidistro-bcm43455`, `wireless-regdb-static`, `wpa-supplicant(-cli,-passphrase)` and `iw`.
 - `meta-mylab/recipes-mylab/rootfs-expand/rootfs-expand.bb` — installs `common/target/rootfs-expand` (copied in at `configure`) and a one-shot `rootfs-expand.service`; pulls in `sfdisk`, `partx` and `resize2fs`.
+- `meta-mylab-ros/` — the ROS 2 layer, see [§4.4](#44-ros-2-in-the-image-meta-mylab-ros).
 
-**Why `layers.lock`?** A branch like `wrynose` keeps receiving fixes, so "build `wrynose`" means different sources next month. Pinning commits makes a rebuild produce the same image — the same idea as `package-lock.json` / `packages.lock.json`.
+**Why `layers.lock`?** A branch like `wrynose` keeps receiving fixes, so "build `wrynose`" means different sources next month. Pinning commits makes a rebuild produce the same image — the same idea as `package-lock.json` / `packages.lock.json`. It does the job Git submodules would (an exact commit per external layer, recorded in this repo), without making every clone download ~1 GB of layers: `fetch` gets each one at depth 1, outside the repo, on the Linux filesystem.
 
 Clean rebuilds are cheap thanks to sstate: `./yocto/yocto.sh clean && ./yocto/yocto.sh build`.
 
@@ -188,6 +192,150 @@ On native Linux the script skips the usbipd part and works the same.
 
 ---
 
+## 4. ROS 2
+
+What this part delivers, step by step:
+
+| Task | Where |
+|---|---|
+| Install ROS 2 on the PC, test it with the official demo nodes | `./tools/ros2.sh install`, `./tools/ros2.sh demo` ([§4.1](#41-ros-2-on-the-pc-and-the-official-demo)) |
+| Two nodes, publisher and subscriber, a counter 1, 2, 3… over one topic | `ros2_ws/src/counter_demo` ([§4.2](#42-the-counter_demo-package)) |
+| Check nodes and topics with ROS 2 commands | [§4.3](#43-build-and-check-on-the-pc), automated in `counter_check.sh` |
+| ROS 2 in the OS build through a separate meta-layer | `yocto/meta-mylab-ros` + meta-ros ([§4.4](#44-ros-2-in-the-image-meta-mylab-ros)) |
+| Build the OS, check the nodes run on it | [§4.5](#45-on-the-pi) |
+| Bonus: a service that starts and stops the counter, values still over the topic | `/counter/enable` + `counter_control` |
+
+### 4.1 ROS 2 on the PC and the official demo
+
+ROS 2 **Jazzy** is the LTS release for Ubuntu 24.04, the WSL distro used here.
+
+```bash
+./tools/ros2.sh install    # adds the ROS 2 apt repository, installs ros-jazzy-ros-base,
+                           # demo-nodes-cpp/-py, std-srvs and ros-dev-tools (colcon)
+./tools/ros2.sh demo       # talker + listener, then ros2 node list / topic list / topic info
+```
+
+`demo` runs the official `demo_nodes_cpp` **talker** (publishes `Hello World: N` on `/chatter`) and **listener** (prints `I heard: [Hello World: N]`), shows them with the ROS 2 CLI and passes when the listener got the messages. By hand, in two terminals:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+ros2 run demo_nodes_cpp talker        # terminal 1
+ros2 run demo_nodes_cpp listener      # terminal 2
+```
+
+### 4.2 The counter_demo package
+
+```
+                      topic /counter (std_msgs/msg/UInt64): 1, 2, 3...
+  counter_publisher  ─────────────────────────────────────────────────▶  counter_subscriber
+         ▲
+         │ service /counter/enable (std_srvs/srv/SetBool)
+         │   data: true = start, false = stop
+  counter_control  start | stop | cycle [s]      (or: ros2 service call ...)
+```
+
+| File | What it is |
+|---|---|
+| `src/counter_publisher.cpp` | Node `counter_publisher`. A wall timer publishes the next value on `counter` every `period_ms` (parameter, default 1000). Serves `counter/enable`: `false` cancels the timer (the count pauses), `true` re-arms it (the count resumes at the next value; parameter `reset_on_start:=true` restarts at 1). Parameter `start_running:=false` waits for a start. |
+| `src/counter_subscriber.cpp` | Node `counter_subscriber`. Prints `I heard: N`; warns when values were missed, notes when the counter restarted. |
+| `src/counter_control.cpp` | Node `counter_control`, a service client: `start`, `stop`, or `cycle 5` (stop/start every 5 s until Ctrl+C). |
+| `launch/counter.launch.py` | Starts publisher + subscriber, passes `period_ms`, `start_running`, `reset_on_start` through. |
+| `scripts/counter_check.sh` | The checks of §4.3 as a script (POSIX `sh`: runs on the PC and on the Pi's BusyBox). |
+| `package.xml`, `CMakeLists.txt` | `ament_cmake` package; depends on `rclcpp`, `std_msgs`, `std_srvs` (standard interfaces, so no custom `.msg`/`.srv` to generate). |
+
+Why `std_srvs/SetBool`: "start or stop" is one boolean with a yes/no answer, exactly that service type; the response message reports where the counter stopped or resumes.
+
+### 4.3 Build and check on the PC
+
+```bash
+./tools/ros2.sh build      # colcon build in ros2_ws
+./tools/ros2.sh run        # ros2 launch counter_demo counter.launch.py (Ctrl+C stops)
+./tools/ros2.sh check      # all the checks below, automatically; ends with PASS
+```
+
+By hand, each in its own terminal (`source /opt/ros/jazzy/setup.bash && source ros2_ws/install/setup.bash` first):
+
+```bash
+ros2 run counter_demo counter_publisher
+ros2 run counter_demo counter_subscriber
+#   or both at once: ros2 launch counter_demo counter.launch.py period_ms:=500
+
+ros2 node list                          # /counter_publisher  /counter_subscriber
+ros2 node info /counter_publisher       # publishes /counter, serves /counter/enable
+ros2 topic list -t                      # /counter [std_msgs/msg/UInt64]
+ros2 topic info -v /counter             # 1 publisher, 1 subscription, QoS
+ros2 topic echo /counter                # data: 17 --- data: 18 ...
+ros2 topic hz /counter                  # ~1.0 Hz
+ros2 service list -t                    # /counter/enable [std_srvs/srv/SetBool]
+ros2 interface show std_srvs/srv/SetBool
+
+ros2 run counter_demo counter_control stop     # "stopped at 18"; the subscriber goes quiet
+ros2 service call /counter/enable std_srvs/srv/SetBool "{data: true}"   # "started, next value 19"
+ros2 run counter_demo counter_control cycle 5  # stop/start every 5 s
+ros2 param set /counter_publisher reset_on_start true
+```
+
+`counter_check.sh` runs these and checks the answers: both nodes listed, `/counter` typed `UInt64` with 1 publisher and a subscriber, `topic echo` sees the count going up, `/counter/enable` typed `SetBool`, after `stop` nothing is published for 5 s, after the `start` call the count resumes right after the value it stopped at.
+
+### 4.4 ROS 2 in the image (meta-mylab-ros)
+
+ROS 2 comes from **meta-ros** (the OpenEmbedded layers maintained by the ROS community; its recipes are generated from each ROS package's `package.xml`). It needs **meta-oe** and **meta-python** from meta-openembedded. Our own additions are a separate layer, **`yocto/meta-mylab-ros`**, so `meta-mylab` and `mylab-image.bb` stay untouched: drop the layer from `bblayers.conf` and the image is ROS-free again.
+
+Layers added to `bblayers.conf` (all pinned in `layers.lock`):
+
+| Layer | From | Gives |
+|---|---|---|
+| `meta-openembedded/meta-oe`, `meta-python`, `meta-networking` | meta-openembedded | Libraries ROS needs (`tinyxml2`, `spdlog`, Python modules, ...) |
+| `meta-ros/meta-ros-common`, `meta-ros2` | meta-ros | ROS build classes (`ros_ament_cmake`, ...), shared recipes |
+| `meta-ros/meta-ros2-jazzy` | meta-ros | the Jazzy package recipes (hundreds), `ROS_DISTRO = "jazzy"` (from `ROS2_DISTRO` in `config.env`) |
+| `meta-mylab-ros` | this repo | Our recipes, below |
+
+`meta-mylab-ros`, file by file:
+
+| File | What it does |
+|---|---|
+| `conf/layer.conf` | Layer `mylab-ros`, priority 13; depends on `mylab` (the image it extends) and `ros2-layer`. |
+| `recipes-core/images/mylab-image.bbappend` | Adds `ros-core` (rclcpp, rclpy, launch, the `ros2` CLI, Fast DDS), `demo-nodes-cpp` (official talker/listener), `counter-demo` and `ros2-profile` to `IMAGE_INSTALL`. |
+| `recipes-ros/counter-demo/counter-demo_1.0.0.bb` | Builds `ros2_ws/src/counter_demo` (copied in by `configure`) with `inherit ros_ament_cmake`, written like meta-ros' generated recipes: `package.xml` dependencies as `DEPENDS` / `RDEPENDS`. Installs to `/opt/ros/jazzy`, plus `counter-demo.service`. |
+| `recipes-ros/counter-demo/files/counter-demo.service` | systemd unit, enabled: at boot runs `ros2 launch counter_demo counter.launch.py`. Output in `journalctl -u counter-demo`. To boot without it: `SYSTEMD_AUTO_ENABLE:pn-counter-demo = "disable"` in `local.conf`. |
+| `recipes-ros/ros2-profile/ros2-profile.bb` | `/etc/profile.d/ros2.sh`: sources `/opt/ros/jazzy/setup.sh`, so `ros2` works in every SSH/console login. |
+
+`local.conf` gains one ROS-specific line pair: `license-exists` QA becomes a warning instead of an error (meta-ros recipes name licences such as `BSD` that oe-core has no text for; meta-ros' own CI does the same).
+
+Changed the C++ code? `./yocto/yocto.sh configure && ./yocto/yocto.sh build`: `configure` copies the package in again, bitbake sees the changed files and rebuilds only `counter-demo` and the image.
+
+### 4.5 On the Pi
+
+```bash
+./yocto/yocto.sh all        # build (first time 3-8 h), checks the ROS packages are in the manifest
+./tools/flash.sh            # also checks /opt/ros/jazzy/lib/counter_demo on the card
+./tools/verify-ssh.sh       # SSH, Wi-Fi, ... as before
+./tools/ros2.sh pi          # counter-demo.service active + its log + counter_check.sh on the Pi
+./tools/ros2.sh pi 192.168.1.57   # if mylab-rpi5.local doesn't resolve
+```
+
+On the Pi itself (`ssh root@mylab-rpi5.local`):
+
+```bash
+systemctl status counter-demo         # started at boot
+journalctl -u counter-demo -f         # [counter_subscriber]: I heard: 42 ...
+ros2 node list                        # /counter_publisher  /counter_subscriber
+ros2 topic echo /counter
+ros2 run counter_demo counter_control stop
+ros2 run counter_demo counter_check.sh
+
+systemctl stop counter-demo           # to run the nodes by hand instead:
+ros2 run counter_demo counter_publisher &
+ros2 run counter_demo counter_subscriber
+ros2 run demo_nodes_cpp talker        # the official demo works on the Pi too
+```
+
+**PC ↔ Pi.** DDS finds nodes across the LAN by multicast, so with the same `ROS_DOMAIN_ID` (default 0) `ros2 topic echo /counter` on the PC shows the Pi's counter, and `counter_control stop` on the PC stops it. WSL2's default NAT network can't do this; set `networkingMode=mirrored` under `[wsl2]` in `.wslconfig`, or use a native Linux PC.
+
+**What to hand in:** the `PASS` of `./tools/ros2.sh demo` and `./tools/ros2.sh check` on the PC, and of `./tools/ros2.sh pi` (or `counter_check.sh` run on the Pi) plus `ros2 node list` / `ros2 topic echo /counter` from an SSH session.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -208,3 +356,7 @@ On native Linux the script skips the usbipd part and works the same.
 | Wi-Fi connected but no IP | `networkctl status wlan0`, `journalctl -u systemd-networkd`. |
 | Serial console | Pi 5 has a dedicated 3-pin UART connector (`ttyAMA10`, 115200 8N1) — useful when the network is the problem. |
 | User-namespace / `unshare` errors | Ubuntu 24.04 AppArmor rule: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. |
+| `ros2 node list` is empty on the Pi | Nodes appear 1–2 s after start; run it again. `systemctl status counter-demo`, `journalctl -u counter-demo`. Over SSH without a login shell: `. /etc/profile` first. |
+| `ros2: not found` | Login shells get it from `/etc/profile.d/ros2.sh`; elsewhere `. /opt/ros/jazzy/setup.sh`. On the PC: `source /opt/ros/jazzy/setup.bash`. |
+| PC and Pi don't see each other's nodes | Same `ROS_DOMAIN_ID` on both (default 0), same LAN, multicast allowed. WSL2 in NAT mode can't do DDS discovery with the LAN: set `networkingMode=mirrored` in `.wslconfig`. |
+| Bitbake: `Nothing PROVIDES 'xyz'` from a ROS recipe | A ROS dependency lives in a layer we don't add. `bitbake-layers show-recipes xyz` in `./yocto/yocto.sh shell`; meta-ros skips most optional ones itself. |

@@ -4,3 +4,5 @@ bitbake            51fd94a67fa17650a9ff623492005972bbc7d26f  2.18
 openembedded-core  0f03c732a0a2d0506b41b1abe60b3f368b2300dc  wrynose
 meta-yocto         7c25b11156553145fa6b241a2d4f65d94438f804  wrynose
 meta-raspberrypi   f62c67921474370829d24a4fa01ef88543f3906b  wrynose
+meta-openembedded  47d7dbdd10890bbd429bc0cccbe14435c37e5af1  wrynose
+meta-ros           95c08773cff114b3fe1a8c8f43643e59151bc8db  wrynose

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# One-shot Yocto build for the Raspberry Pi 5: same image as yocto.sh, without the checks.
-# Assumes: Ubuntu on WSL2, repo inside the Linux filesystem, ~120 GB free, 16 GB+ RAM, internet, sudo.
+# One-shot Yocto build for the Raspberry Pi 5 (with ROS 2): same image as yocto.sh, without the checks.
+# Assumes: Ubuntu on WSL2, repo inside the Linux filesystem, ~150 GB free, 16 GB+ RAM, internet, sudo.
 # Settings come from config.env / config.local.env; layer versions from yocto/layers.lock.
 set -euo pipefail                                                   # stop on the first error
 cd "$(dirname "$0")/.." && REPO="$(pwd)"                            # work from the repo root
 source config.env                                                   # shared defaults
 if [ -f config.local.env ]; then source config.local.env; else echo "WARNING: no config.local.env in $REPO - building with defaults, no Wi-Fi"; fi
-echo "Settings: hostname=$RPI_HOSTNAME wifi=${WIFI_SSID:-none} country=${WIFI_COUNTRY:-none} root-password-ssh=$ALLOW_ROOT_PASSWORD_SSH"   # check before a long build
+echo "Settings: hostname=$RPI_HOSTNAME wifi=${WIFI_SSID:-none} country=${WIFI_COUNTRY:-none} root-password-ssh=$ALLOW_ROOT_PASSWORD_SSH ros2=$ROS2_DISTRO"   # check before a long build
 
 # ---- Host setup ------------------------------------------------------------
 WIN_USER="$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r' || true)"   # Windows user, for the export at the end
@@ -29,6 +29,8 @@ declare -A GH=(
     [openembedded-core]=openembedded/openembedded-core              # core recipes + classes
     [meta-yocto]=yoctoproject/meta-yocto                            # the poky distro
     [meta-raspberrypi]=agherzan/meta-raspberrypi                    # Pi 5 machine, kernel, firmware
+    [meta-openembedded]=openembedded/meta-openembedded              # meta-oe, meta-python, meta-networking (ROS needs them)
+    [meta-ros]=ros/meta-ros                                         # ROS 2 recipes (meta-ros2-<distro>)
 )
 while read -r name rev _; do
     [ "$(git -C "$Y/$name" rev-parse HEAD 2>/dev/null || true)" = "$rev" ] && continue   # already there
@@ -48,6 +50,9 @@ L="$Y/meta-mylab/recipes-mylab"                                     # our recipe
 rm -rf "$Y/meta-mylab" && cp -a yocto/meta-mylab "$Y/meta-mylab"    # fresh copy of meta-mylab
 install -D -m 644 "$SSH_PUBKEY" "$L/ssh-root-key/files/authorized_keys"        # your key -> root login over SSH
 install -m 755 common/target/rootfs-expand "$L/rootfs-expand/files/"           # first-boot resize script
+rm -rf "$Y/meta-mylab-ros" && cp -a yocto/meta-mylab-ros "$Y/meta-mylab-ros"  # fresh copy of meta-mylab-ros
+cp -a ros2_ws/src/counter_demo "$Y/meta-mylab-ros/recipes-ros/counter-demo/files/"   # our ROS 2 package -> counter-demo recipe
+rm -rf "$Y/meta-mylab-ros/recipes-ros/counter-demo/files/counter_demo/"{build,install,log}   # no colcon output
 WPA="$L/wifi-config/files/wpa_supplicant-nl80211-wlan0.conf"        # Wi-Fi settings file
 cat > "$WPA" <<EOF
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=0
@@ -67,7 +72,10 @@ POKY_BBLAYERS_CONF_VERSION = "2"
 LCONF_VERSION = "7"
 BBPATH = "\${TOPDIR}"
 BBFILES ?= ""
-BBLAYERS ?= "$Y/openembedded-core/meta $Y/meta-yocto/meta-poky $Y/meta-raspberrypi $Y/meta-mylab"
+BBLAYERS ?= "$Y/openembedded-core/meta $Y/meta-yocto/meta-poky $Y/meta-raspberrypi \
+  $Y/meta-openembedded/meta-oe $Y/meta-openembedded/meta-python $Y/meta-openembedded/meta-networking \
+  $Y/meta-ros/meta-ros-common $Y/meta-ros/meta-ros2 $Y/meta-ros/meta-ros2-$ROS2_DISTRO \
+  $Y/meta-mylab $Y/meta-mylab-ros"
 EOF
 cat > "$BUILD/conf/local.conf" <<EOF
 CONF_VERSION = "2"
@@ -87,6 +95,8 @@ IMAGE_FSTYPES = "wic.xz wic.bmap"
 hostname:pn-base-files = "$RPI_HOSTNAME"
 MYLAB_ROOT_HASH = "${ROOT_HASH//\$/\\\$}"
 MYLAB_ALLOW_ROOT_PASSWORD_SSH = "$ALLOW_ROOT_PASSWORD_SSH"
+ERROR_QA:remove = "license-exists"
+WARN_QA:append = " license-exists"
 PATCHRESOLVE = "noop"
 EOF
 chmod 600 "$BUILD/conf/local.conf"                                  # it contains the password hash
@@ -94,7 +104,7 @@ chmod 600 "$BUILD/conf/local.conf"                                  # it contain
 # ---- Build -----------------------------------------------------------------
 cd "$Y/openembedded-core"                                           # the env script lives here
 set +eu; source ./oe-init-build-env "$BUILD" >/dev/null; set -eu   # puts bitbake on PATH (not strict-mode safe)
-bitbake mylab-image                                                 # kernel, packages, rootfs, .wic.xz (2-6 h first time)
+bitbake mylab-image                                                 # kernel, ROS 2, packages, rootfs, .wic.xz (3-8 h first time)
 
 # ---- Export ----------------------------------------------------------------
 IMG="$WORK_DIR/$RPI_HOSTNAME-yocto-$YOCTO_RELEASE.wic.xz"           # friendlier file name
@@ -103,3 +113,4 @@ WIN_DIR="/mnt/c/Users/$WIN_USER/Downloads/rpi5-images"             # Windows Dow
 if [ -n "$WIN_USER" ]; then mkdir -p "$WIN_DIR" && cp -f "$IMG" "$WIN_DIR/"; fi   # for Raspberry Pi Imager
 echo "Done: $IMG"                                                   # flash it: ./tools/flash.sh yocto
 echo "Then boot the Pi and run: cd $REPO && ./tools/verify-ssh.sh"  # finds mylab-rpi5.local and checks everything
+echo "ROS 2 on the Pi:          cd $REPO && ./tools/ros2.sh pi"     # nodes, topic and service check over SSH

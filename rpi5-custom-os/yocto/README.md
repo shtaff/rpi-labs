@@ -1,6 +1,6 @@
 # Yocto flow: step by step
 
-This folder builds a Raspberry Pi 5 Linux image with the **Yocto Project** (release 6.0 "wrynose"). It contains OpenSSH with your key, Wi-Fi, first-boot resize, mDNS and NTP, built the Yocto way: from **layers** of **recipes**, scheduled by **bitbake**, with systemd as the init system.
+This folder builds a Raspberry Pi 5 Linux image with the **Yocto Project** (release 6.0 "wrynose"). It contains OpenSSH with your key, Wi-Fi, first-boot resize, mDNS, NTP and **ROS 2 Jazzy** with our `counter_demo` nodes, built the Yocto way: from **layers** of **recipes**, scheduled by **bitbake**, with systemd as the init system.
 
 One script drives everything: [`yocto.sh`](yocto.sh). This document explains every file it uses, what each step does, and what happens on the Pi when it boots.
 
@@ -20,7 +20,7 @@ One script drives everything: [`yocto.sh`](yocto.sh). This document explains eve
 | File | What it is | Why it's needed |
 |---|---|---|
 | [`yocto.sh`](yocto.sh) | The driver script. Steps: `deps`, `fetch`, `lock`, `update`, `configure`, `build`, `shell`, `export`, `clean`, `all`. | Fetches the layers, writes the build configuration, runs `bitbake` in the right environment and checks the result. |
-| [`layers.lock`](layers.lock) | The exact git commit of each upstream layer (bitbake, openembedded-core, meta-yocto, meta-raspberrypi). | Makes builds **reproducible**: the same lock file gives the same sources, even months later. Same idea as `package-lock.json`. Changed only by `update` / `lock`. |
+| [`layers.lock`](layers.lock) | The exact git commit of each upstream layer (bitbake, openembedded-core, meta-yocto, meta-raspberrypi, meta-openembedded, meta-ros). | Makes builds **reproducible**: the same lock file gives the same sources, even months later. Same idea as `package-lock.json`. Changed only by `update` / `lock`. |
 | [`meta-mylab/`](meta-mylab/) | **Our layer**: everything this project adds to Yocto. | In Yocto you never edit other people's layers; you add your own on top. |
 | [`meta-mylab/conf/layer.conf`](meta-mylab/conf/layer.conf) | Layer definition. | Tells bitbake where our recipes are (`recipes-*/*/*.bb`), the layer's priority (10), which layers it needs (`core`, `raspberrypi`) and which Yocto release it works with (`wrynose`). |
 | [`meta-mylab/recipes-core/images/mylab-image.bb`](meta-mylab/recipes-core/images/mylab-image.bb) | **The image recipe**: what goes into the root filesystem. | Starts from `core-image-minimal` and adds the SSH server, kernel modules, `iproute2`, the Wi-Fi packages, `rootfs-expand` and `avahi-daemon`. Sets the root password hash with `extrausers`. Adds 128 MB of free space. |
@@ -32,6 +32,13 @@ One script drives everything: [`yocto.sh`](yocto.sh). This document explains eve
 | [`meta-mylab/recipes-mylab/rootfs-expand/rootfs-expand.bb`](meta-mylab/recipes-mylab/rootfs-expand/rootfs-expand.bb) | Recipe for the first-boot resize. | Installs `/usr/sbin/rootfs-expand` and `rootfs-expand.service`, enables the service, and pulls in `sfdisk`, `partx` and `resize2fs`. |
 | [`meta-mylab/recipes-mylab/rootfs-expand/files/rootfs-expand.service`](meta-mylab/recipes-mylab/rootfs-expand/files/rootfs-expand.service) | systemd unit. | Runs the resize once at boot, after `/` is writable. Skipped once `/etc/rootfs-expanded` exists. |
 | `meta-mylab/recipes-mylab/rootfs-expand/files/rootfs-expand` | The resize script. | Copied in by `configure` from [`../common/target/rootfs-expand`](../common/target/rootfs-expand), git-ignored. |
+| [`meta-mylab-ros/`](meta-mylab-ros/) | **Our ROS 2 layer**, separate from `meta-mylab`. | Adds ROS 2 and our package to `mylab-image` with a `.bbappend`, so `meta-mylab` stays ROS-free. |
+| [`meta-mylab-ros/conf/layer.conf`](meta-mylab-ros/conf/layer.conf) | Layer definition. | Priority 13; needs `mylab` (the image it extends) and meta-ros' `ros2-layer`. |
+| [`meta-mylab-ros/recipes-core/images/mylab-image.bbappend`](meta-mylab-ros/recipes-core/images/mylab-image.bbappend) | Additions to our image recipe. | `IMAGE_INSTALL` += `ros-core` (rclcpp, rclpy, launch, `ros2` CLI, Fast DDS), `demo-nodes-cpp`, `counter-demo`, `ros2-profile`. |
+| [`meta-mylab-ros/recipes-ros/counter-demo/counter-demo_1.0.0.bb`](meta-mylab-ros/recipes-ros/counter-demo/counter-demo_1.0.0.bb) | Recipe for our ROS 2 package. | Builds `ros2_ws/src/counter_demo` with meta-ros' `ros_ament_cmake` class into `/opt/ros/jazzy`, and installs and enables `counter-demo.service`. |
+| [`meta-mylab-ros/recipes-ros/counter-demo/files/counter-demo.service`](meta-mylab-ros/recipes-ros/counter-demo/files/counter-demo.service) | systemd unit. | Runs `ros2 launch counter_demo counter.launch.py` at boot. |
+| `meta-mylab-ros/recipes-ros/counter-demo/files/counter_demo/` | The package source. | Copied in by `configure` from [`../ros2_ws/src/counter_demo`](../ros2_ws/src/counter_demo), git-ignored. |
+| [`meta-mylab-ros/recipes-ros/ros2-profile/ros2-profile.bb`](meta-mylab-ros/recipes-ros/ros2-profile/ros2-profile.bb) | Recipe for `/etc/profile.d/ros2.sh`. | Sources `/opt/ros/jazzy/setup.sh` in login shells, so `ros2` just works over SSH. |
 | [`quick-build.sh`](quick-build.sh) | The whole flow (deps → fetch → configure → build → export) as one top-to-bottom script, one comment per line, no checks. Fetches from the GitHub mirrors at the commits in `layers.lock`. | A quick read of the whole flow, or a one-command build. Builds the same image as `yocto.sh`. Its `local.conf` is a copy of the one in `yocto.sh`: keep the two in sync. |
 | `README.md` | This document. | |
 
@@ -39,13 +46,15 @@ One script drives everything: [`yocto.sh`](yocto.sh). This document explains eve
 
 | File | Used for |
 |---|---|
-| [`../config.env`](../config.env) | All settings: hostname, root password policy, SSH key path, Wi-Fi, `YOCTO_RELEASE`, `BITBAKE_BRANCH`, `WORK_DIR`, `JOBS`. |
+| [`../config.env`](../config.env) | All settings: hostname, root password policy, SSH key path, Wi-Fi, `YOCTO_RELEASE`, `BITBAKE_BRANCH`, `ROS2_DISTRO`, `WORK_DIR`, `JOBS`. |
 | `../config.local.env` | Your private overrides, mainly the Wi-Fi network name and passphrase. Git-ignored; create it from [`../config.local.env.example`](../config.local.env.example). |
 | [`../common/lib.sh`](../common/lib.sh) | Helper functions: `preflight` (WSL/disk/RAM checks, `PATH` fix), `ensure_ssh_key`, `make_root_hash`, `make_wifi_conf`, `export_to_windows`. |
 | [`../common/target/rootfs-expand`](../common/target/rootfs-expand) | The first-boot resize script (runs on the Pi). |
 | [`../tools/flash.sh`](../tools/flash.sh) | Writes the `.wic.xz` to an SD card from WSL, using `bmaptool` and the `.bmap` file. |
 | [`../tools/verify-ssh.sh`](../tools/verify-ssh.sh) | Finds the booted Pi, logs in with your key and checks everything works. |
 | [`../tools/lint.sh`](../tools/lint.sh) | Static checks of all scripts and of `layers.lock`, in seconds. |
+| [`../ros2_ws/src/counter_demo/`](../ros2_ws/src/counter_demo/) | The ROS 2 package built by `counter-demo.bb` (the same source you build on the PC with colcon). |
+| [`../tools/ros2.sh`](../tools/ros2.sh) | ROS 2 on the PC (install, official demo, build, check) and `ros2.sh pi`: the check on the Pi over SSH. |
 
 ### Generated files (in `~/rpi5-os/`, never in the repo)
 
@@ -55,7 +64,10 @@ One script drives everything: [`yocto.sh`](yocto.sh). This document explains eve
 | `yocto/openembedded-core/` | `fetch` | **oe-core**: the base layer (`meta/`) with ~1000 recipes (gcc, glibc, systemd, openssh, wpa-supplicant, ...), the core classes and `oe-init-build-env`. |
 | `yocto/meta-yocto/` | `fetch` | Contains `meta-poky`, which defines the **poky** distribution (default distro policy). |
 | `yocto/meta-raspberrypi/` | `fetch` | The **BSP** (board support) layer: the `raspberrypi5` machine, the Raspberry Pi kernel, boot firmware, `config.txt` generation, Wi-Fi firmware recipes, the SD card layout. |
+| `yocto/meta-openembedded/` | `fetch` | Extra layers on top of oe-core. We use `meta-oe`, `meta-python` and `meta-networking`: libraries and Python modules ROS needs. |
+| `yocto/meta-ros/` | `fetch` | **meta-ros**: `meta-ros-common` and `meta-ros2` (ROS build classes such as `ros_ament_cmake`) and `meta-ros2-jazzy` (the Jazzy package recipes, generated from each package's `package.xml`). |
 | `yocto/meta-mylab/` | `configure` | A **copy** of our layer, plus the generated key, Wi-Fi config and resize script. Rebuilt on every `configure`. |
+| `yocto/meta-mylab-ros/` | `configure` | A **copy** of our ROS 2 layer, plus `counter_demo` from `ros2_ws/src`. Rebuilt on every `configure`. |
 | `yocto/build/conf/bblayers.conf`, `local.conf` | `configure` | Which layers to use, and the build settings. |
 | `yocto/build/tmp/` | `build` | Work directories, packages, the root filesystem and the final images. `clean` deletes this. |
 | `yocto-downloads/` | `build` | Every source tarball and git repo bitbake fetched (`DL_DIR`). Kept by `clean`. |
@@ -66,7 +78,7 @@ One script drives everything: [`yocto.sh`](yocto.sh). This document explains eve
 ## 2. Yocto in five ideas
 
 1. **Recipe (`.bb`)**: how to build one piece of software: where the source is (`SRC_URI`), how to compile and install it (`do_compile`, `do_install`), and which **packages** to split the result into (`FILES:...`). One recipe often makes several packages: `wpa-supplicant` makes `wpa-supplicant`, `wpa-supplicant-cli`, `wpa-supplicant-passphrase`, and so on.
-2. **Layer (`meta-*`)**: a folder of recipes and configuration. Layers are stacked; a higher-priority layer can add to or override a lower one without editing it (`.bbappend`). We use four upstream layers plus `meta-mylab`.
+2. **Layer (`meta-*`)**: a folder of recipes and configuration. Layers are stacked; a higher-priority layer can add to or override a lower one without editing it (`.bbappend`). We use eight upstream layers plus `meta-mylab` and `meta-mylab-ros`.
 3. **MACHINE, DISTRO, IMAGE**: three independent choices.
    - `MACHINE = "raspberrypi5"` (from meta-raspberrypi): CPU tuning (Cortex-A76), kernel, device trees, boot files, serial console.
    - `DISTRO = "poky"` (from meta-poky), plus `INIT_MANAGER = "systemd"`: policy, such as which C library, init system and features like `wifi`.
@@ -101,7 +113,7 @@ Yocto builds most of its own tools, including the cross-compiler, from source. T
 
 ### `fetch`: download the layers (at the locked commits)
 
-For each of the four upstream layers, in `~/rpi5-os/yocto/<name>/`:
+For each upstream repository, in `~/rpi5-os/yocto/<name>/`:
 
 | Layer | Branch | Primary server | Fallback mirror |
 |---|---|---|---|
@@ -109,13 +121,15 @@ For each of the four upstream layers, in `~/rpi5-os/yocto/<name>/`:
 | `openembedded-core` | `wrynose` | git.openembedded.org | github.com/openembedded |
 | `meta-yocto` | `wrynose` | git.yoctoproject.org | github.com/yoctoproject |
 | `meta-raspberrypi` | `wrynose` | git.yoctoproject.org | github.com/agherzan |
+| `meta-openembedded` | `wrynose` | git.openembedded.org | github.com/openembedded |
+| `meta-ros` | `wrynose` | github.com/ros | (same) |
 
 For each layer (the `clone` function):
 1. Looks up its commit in [`layers.lock`](layers.lock).
 2. If that commit is already checked out, does nothing.
 3. Otherwise fetches **just that commit** (`git fetch --depth 1 <server> <commit>`). If the server doesn't allow fetching by commit hash, it fetches the whole branch and picks the commit from it.
 4. Checks out the commit (detached HEAD). If the primary server fails, it tries the mirror; if both fail, it stops with an error.
-5. Finally checks that `meta-raspberrypi/conf/machine/raspberrypi5.conf` exists.
+5. Finally checks that `meta-raspberrypi/conf/machine/raspberrypi5.conf` and `meta-ros/meta-ros2-jazzy` (from `ROS2_DISTRO`) exist.
 
 `bitbake/` must sit next to `openembedded-core/`: the environment script `oe-init-build-env` looks for it there.
 
@@ -146,13 +160,19 @@ How `make_wifi_conf` (in `common/lib.sh`) writes the Wi-Fi config:
 
 Bitbake notices when a file in `SRC_URI` changes (it hashes the files), so changing the key or the Wi-Fi settings rebuilds only those two small packages.
 
+Then the same for **`meta-mylab-ros`**: deletes the old copy, copies [`meta-mylab-ros/`](meta-mylab-ros/), and copies [`../ros2_ws/src/counter_demo`](../ros2_ws/src/counter_demo) into `recipes-ros/counter-demo/files/counter_demo/` (without colcon's `build/`, `install/`, `log/`). Edit the C++ code, run `configure` + `build`, and only `counter-demo` and the image are rebuilt.
+
 **3.3 Write `build/conf/bblayers.conf`**: the list of layers bitbake reads:
 
 ```
 openembedded-core/meta     core recipes and classes
 meta-yocto/meta-poky       the poky distro
 meta-raspberrypi           the Pi 5 machine
+meta-openembedded/meta-oe, meta-python, meta-networking   libraries ROS needs
+meta-ros/meta-ros-common, meta-ros2                       ROS build classes
+meta-ros/meta-ros2-jazzy   ROS 2 Jazzy recipes
 meta-mylab                 ours
+meta-mylab-ros             ours: ROS 2 in the image
 ```
 
 **3.4 Write `build/conf/local.conf`**: the build settings. Mode 600, because it contains the password hash.
@@ -172,6 +192,7 @@ meta-mylab                 ours
 | `hostname:pn-base-files` | Sets `/etc/hostname`. The `:pn-base-files` suffix means "only for the `base-files` recipe". |
 | `MYLAB_ROOT_HASH`, `MYLAB_ALLOW_ROOT_PASSWORD_SSH` | Our own variables, read by `mylab-image.bb`. Every `$` in the hash is escaped as `\$`, otherwise bitbake would try to expand it. |
 | `USER_CLASSES ?= "buildstats"` | Records task timings in `tmp/buildstats/`. |
+| `ERROR_QA:remove` / `WARN_QA:append = "license-exists"` | meta-ros recipes name licences (e.g. `BSD`) that oe-core has no licence text for. That check becomes a warning instead of failing the build, as in meta-ros' own CI configuration. |
 | `PATCHRESOLVE = "noop"` | If a patch fails, stop instead of opening an interactive shell. |
 
 **3.5 Check.** Runs `bitbake-layers show-layers` inside the build environment. If a layer path is wrong or the layers don't support this release (`LAYERSERIES_COMPAT`), this fails here instead of an hour into the build.
@@ -211,7 +232,7 @@ meta-mylab                 ours
 
 After bitbake finishes, `yocto.sh` checks the result:
 1. Finds `tmp/deploy/images/raspberrypi5/mylab-image-raspberrypi5*.wic.xz`.
-2. Checks the **manifest** lists `openssh-sshd`, `ssh-root-key`, `wpa-supplicant`, `wifi-config`, `linux-firmware-rpidistro-bcm43455`, `rootfs-expand` and `avahi-daemon`. A missing one fails the build. This catches a package that was silently left out.
+2. Checks the **manifest** lists `openssh-sshd`, `ssh-root-key`, `wpa-supplicant`, `wifi-config`, `linux-firmware-rpidistro-bcm43455`, `rootfs-expand`, `avahi-daemon`, and the ROS 2 packages `ros-core`, `ros2cli`, `demo-nodes-cpp`, `counter-demo`, `ros2-profile`. A missing one fails the build. This catches a package that was silently left out.
 
 NTP needs no extra package: `systemd-timesyncd` comes with systemd.
 
@@ -259,6 +280,7 @@ Deletes `build/tmp/`. Downloads and sstate are kept, so the next `build` restore
 | `systemd-timesyncd` | systemd | NTP: sets the clock once the network is up, and saves it to disk on shutdown so the clock doesn't go backwards. |
 | `avahi-daemon` | avahi | Announces `mylab-rpi5.local` and the SSH service. |
 | `sshd` | openssh | SSH on port 22. |
+| **`counter-demo`** | `counter-demo` recipe | `ros2 launch counter_demo counter.launch.py`: `counter_publisher` and `counter_subscriber`. Log: `journalctl -u counter-demo -f`. |
 | `serial-getty@ttyAMA10` | systemd | Login prompt on the serial console. |
 
 Useful commands on the Pi: `systemctl status`, `systemctl --failed`, `journalctl -b`, `networkctl`, `timedatectl`.
@@ -270,14 +292,16 @@ Useful commands on the Pi: `systemctl status`, `systemctl --failed`, `journalctl
 | I want to... | Change | Then run |
 |---|---|---|
 | Change hostname, password policy, Wi-Fi network | `config.env` / `config.local.env` | `configure` + `build` |
-| Add a package that exists in our layers (for example `htop`) | Add it to `IMAGE_INSTALL:append` in [`mylab-image.bb`](meta-mylab/recipes-core/images/mylab-image.bb). Check it exists first: `bitbake-layers show-recipes htop` in `shell`. Many packages live in **meta-openembedded**, which we don't fetch yet: add it to `LAYERS` in `yocto.sh`, `bblayers.conf` and `layers.lock`. | `configure` + `build` |
+| Add a package that exists in our layers (for example `htop`) | Add it to `IMAGE_INSTALL:append` in [`mylab-image.bb`](meta-mylab/recipes-core/images/mylab-image.bb). Check it exists first: `bitbake-layers show-recipes htop` in `shell`. Many packages live in **meta-openembedded**; we use `meta-oe`, `meta-python` and `meta-networking` from it, others (e.g. `meta-multimedia`) can be added to `bblayers.conf` in `yocto.sh`. | `configure` + `build` |
+| Change the ROS 2 nodes | Edit [`../ros2_ws/src/counter_demo`](../ros2_ws/src/counter_demo); test on the PC with `./tools/ros2.sh build check`. New dependencies go in `package.xml` **and** in `ROS_BUILD_DEPENDS` / `ROS_EXEC_DEPENDS` of `counter-demo_1.0.0.bb`. | `configure` + `build` |
+| Add another ROS 2 package from meta-ros (e.g. `demo-nodes-py`) | `IMAGE_INSTALL:append` in [`mylab-image.bbappend`](meta-mylab-ros/recipes-core/images/mylab-image.bbappend) | `configure` + `build` |
 | Install my own file or script | Write a small recipe in `meta-mylab/recipes-mylab/<name>/` (copy [`ssh-root-key.bb`](meta-mylab/recipes-mylab/ssh-root-key/ssh-root-key.bb) as a template) and add it to `IMAGE_INSTALL` | `configure` + `build` |
 | Change a file installed by someone else's recipe | Create `meta-mylab/recipes-.../<recipe>/<recipe>.bbappend`. Never edit the upstream layer. | `configure` + `build` |
 | Change a kernel option | Quick test: `bitbake -c menuconfig virtual/kernel` in `shell`. To keep it: a `linux-raspberrypi_%.bbappend` with a `.cfg` fragment in `SRC_URI`. | `build` |
 | Move to newer upstream layers | `./yocto/yocto.sh update`, rebuild, test, commit `layers.lock` | `build` |
-| Change Wi-Fi without rebuilding | On the Pi: `wpa_cli -i wlan0 ...` then `save_config` (see the main [README](../README.md#how-wi-fi-is-set-up-both-flows)) | — |
+| Change Wi-Fi without rebuilding | On the Pi: `wpa_cli -i wlan0 ...` then `save_config` (see the main [README](../README.md#the-mental-model)) | — |
 
-Why `configure` after layer changes: `build` uses the **copy** in `~/rpi5-os/yocto/meta-mylab`, not the folder in the repo. `configure` refreshes the copy.
+Why `configure` after layer changes: `build` uses the **copies** in `~/rpi5-os/yocto/meta-mylab` and `meta-mylab-ros`, not the folders in the repo. `configure` refreshes the copy.
 
 ---
 
@@ -290,7 +314,10 @@ Why `configure` after layer changes: `build` uses the **copy** in `~/rpi5-os/yoc
 │   ├── openembedded-core/          core layer              (fetch, locked)
 │   ├── meta-yocto/                 poky distro layer       (fetch, locked)
 │   ├── meta-raspberrypi/           Pi BSP layer            (fetch, locked)
+│   ├── meta-openembedded/          meta-oe, meta-python... (fetch, locked)
+│   ├── meta-ros/                   ROS layers              (fetch, locked)
 │   ├── meta-mylab/                 copy of our layer + generated files (configure)
+│   ├── meta-mylab-ros/             copy of our ROS layer + counter_demo source (configure)
 │   └── build/
 │       ├── conf/
 │       │   ├── bblayers.conf       which layers            (configure)
