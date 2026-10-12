@@ -163,6 +163,7 @@ How `make_wifi_conf` writes the Wi-Fi config:
 | `BR2_PACKAGE_UTIL_LINUX` + `_BINARIES`, `_PARTX`; `BR2_PACKAGE_E2FSPROGS` + `_RESIZE2FS` | `sfdisk`, `partx` and `resize2fs`, used by the first-boot resize. |
 | `BR2_PACKAGE_AVAHI` + `_DAEMON`, `_DEFAULT_SERVICES` | mDNS: the Pi answers to `mylab-rpi5.local` and advertises its SSH service. |
 | `BR2_PACKAGE_CHRONY` | NTP client. The Pi 5 RTC has no battery by default, so the clock is wrong after power-off until this syncs it. |
+| `BR2_PACKAGE_RPI_FIRMWARE_INSTALL_DTB_OVERLAYS` | Puts the firmware's `overlays/` folder on the boot partition (stock: off). Newer Pi 5 boards (Rev 1.1, D0 chip) need `overlays/bcm2712d0.dtbo`. Without it the kernel gets the older C1 chip's pin layout and panics about 1.5 s into boot (`SError` in `bcm2712_pull_config_set`). |
 
 **3.5 Combine and apply.**
 1. `cat raspberrypi5_defconfig mylab.fragment > mylab_rpi5_defconfig`. The stock file sets the board basics: ARM64 Cortex-A76, an external cross-toolchain, the Raspberry Pi kernel with the `bcm2712` config and Pi 5 device trees, Pi boot firmware, DHCP on `eth0`, an ext4 root filesystem. When an option appears twice, the **last** value wins, so our fragment overrides the stock one (for example the 256M size).
@@ -191,7 +192,7 @@ Runs one `make` in `br-output/` with `BR2_JLEVEL=$JOBS` (parallel jobs **inside*
      - creates `/var/lib/chrony` for chrony's drift file
      - edits `/etc/ssh/sshd_config`: `PubkeyAuthentication yes`, and either `PermitRootLogin prohibit-password` + `PasswordAuthentication no` (key only, the default) or `PermitRootLogin yes` + `PasswordAuthentication yes`
 7. **Filesystem image.** Packs `target/` into `images/rootfs.ext4` (256 MB).
-8. **Post-image.** The stock `board/raspberrypi5/post-image.sh` runs `genimage`. It creates a FAT `boot.vfat` holding the kernel, the device trees, `config.txt` and `cmdline.txt`, then writes an MBR `sdcard.img` with partition 1 = boot (FAT) and partition 2 = root (ext4).
+8. **Post-image.** The stock `board/raspberrypi5/post-image.sh` runs `genimage`. It creates a FAT `boot.vfat` holding the kernel, the device trees, `overlays/`, `config.txt` and `cmdline.txt`, then writes an MBR `sdcard.img` with partition 1 = boot (FAT) and partition 2 = root (ext4).
 
 After `make`, `br.sh` checks `br-output/target/` (the unpacked root filesystem) to catch a broken build before you flash it:
 - **must exist** (the build fails otherwise): `sshd`, `authorized_keys`, an `S*sshd` init script, `wpa_supplicant`, `S45wifi`, `wpa_supplicant.conf`, `sfdisk`, `partx`, `resize2fs`, `rootfs-expand`, `avahi-daemon`, `chronyd`, and the init scripts `S05rootfs-expand`, `S49chronyd`, `S50avahi-daemon`
@@ -268,7 +269,7 @@ Deletes `br-output/`. Downloads (`br-dl/`) and the compiler cache (`br-ccache/`)
     └── images/
         ├── Image               the kernel
         ├── *.dtb               device trees
-        ├── rpi-firmware/       config.txt, cmdline.txt, boot files
+        ├── rpi-firmware/       config.txt, cmdline.txt, overlays/
         ├── boot.vfat           partition 1
         ├── rootfs.ext4         partition 2
         ├── sdcard.img          the full card image  ← flash this

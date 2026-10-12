@@ -105,6 +105,11 @@ BR2_PACKAGE_AVAHI_DAEMON=y
 BR2_PACKAGE_AVAHI_DEFAULT_SERVICES=y
 # NTP: no RTC battery by default, so the clock is wrong after every power-off.
 BR2_PACKAGE_CHRONY=y
+# Boot overlays (overlays/ on the FAT partition). The stock defconfig leaves them
+# out, but newer Pi 5 boards (Rev 1.1, D0 chip) need overlays/bcm2712d0.dtbo:
+# without it the kernel gets the C1 pin layout and panics (SError in
+# bcm2712_pull_config_set) about 1.5 s into boot.
+BR2_PACKAGE_RPI_FIRMWARE_INSTALL_DTB_OVERLAYS=y
 EOF
 
     # 3) Base defconfig + fragment. For duplicated symbols Kconfig keeps the
@@ -125,7 +130,7 @@ EOF
                BR2_PACKAGE_WPA_SUPPLICANT=y BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y \
                BR2_PACKAGE_UTIL_LINUX_BINARIES=y BR2_PACKAGE_UTIL_LINUX_PARTX=y \
                BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y BR2_PACKAGE_AVAHI_DAEMON=y \
-               BR2_PACKAGE_CHRONY=y; do
+               BR2_PACKAGE_CHRONY=y BR2_PACKAGE_RPI_FIRMWARE_INSTALL_DTB_OVERLAYS=y; do
         grep -qx "$sym" "$c" || die "Expected $sym in .config"
     done
     grep -q "^BR2_TARGET_GENERIC_HOSTNAME=\"$RPI_HOSTNAME\"" "$c" || die "hostname not applied"

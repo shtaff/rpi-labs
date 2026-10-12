@@ -267,6 +267,7 @@ verify_card() {
     if [[ -n "$p1" ]] && sudo mount -o ro "$p1" "$mnt" 2>/dev/null; then
         [[ -f "$mnt/config.txt" ]] && ok "boot: config.txt present" || warn "boot: no config.txt"
         compgen -G "$mnt/*2712*" >/dev/null && ok "boot: Pi 5 (bcm2712) kernel/DTB present" || warn "boot: no bcm2712 files"
+        [[ -f "$mnt/overlays/bcm2712d0.dtbo" ]] && ok "boot: D0 overlay present (Rev 1.1 boards)" || warn "boot: no overlays/bcm2712d0.dtbo, newer Pi 5 boards (Rev 1.1, D0) will panic at boot"
         sudo umount "$mnt"
     else
         warn "Could not mount boot partition ($p1) for inspection"

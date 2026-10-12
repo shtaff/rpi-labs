@@ -85,6 +85,7 @@ BR2_PACKAGE_AVAHI=y
 BR2_PACKAGE_AVAHI_DAEMON=y
 BR2_PACKAGE_AVAHI_DEFAULT_SERVICES=y
 BR2_PACKAGE_CHRONY=y
+BR2_PACKAGE_RPI_FIRMWARE_INSTALL_DTB_OVERLAYS=y
 EOF
 chmod 600 "$DEFCONFIG"                                              # it contains the password hash
 make -C "$BR" O="$OUT" BR2_DEFCONFIG="$DEFCONFIG" defconfig         # expand into the full .config
