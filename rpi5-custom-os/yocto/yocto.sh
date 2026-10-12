@@ -146,7 +146,9 @@ step_update() {
 
 step_configure() {
     yocto_preflight
-    [[ -d "$Y/openembedded-core" ]] || step_fetch
+    # Always: brings in layers added to LAYERS / layers.lock since the last
+    # fetch. A layer already at its locked commit is skipped in a second.
+    step_fetch
     ensure_ssh_key
     make_root_hash
 

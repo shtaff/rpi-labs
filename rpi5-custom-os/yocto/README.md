@@ -142,6 +142,8 @@ Why bother: `wrynose` is a stable branch that keeps receiving fixes. Without the
 
 ### `configure`: set up the build directory
 
+**3.0 Fetch.** Runs `fetch` first, so layers added to `layers.lock` since the last build (e.g. meta-ros) are downloaded; layers already at their locked commit are skipped.
+
 **3.1 SSH key and root password** (`ensure_ssh_key`, `make_root_hash`): a key pair is created if missing, and the password becomes a SHA-512 crypt hash.
 
 **3.2 Install our layer with your data.** Deletes `~/rpi5-os/yocto/meta-mylab`, copies [`meta-mylab/`](meta-mylab/) there, then adds three generated files:
