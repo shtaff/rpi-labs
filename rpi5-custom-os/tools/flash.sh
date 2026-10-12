@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Flash the built image to an SD card from WSL (via usbipd-win) or native Linux.
 #
-#   ./tools/flash.sh                      # newest image (Buildroot or Yocto), pick reader interactively
-#   ./tools/flash.sh buildroot            # Buildroot sdcard.img
-#   ./tools/flash.sh yocto                # Yocto .wic.xz (uses bmaptool + .bmap if available)
+#   ./tools/flash.sh                      # the Yocto .wic.xz (uses bmaptool + .bmap if available)
+#   ./tools/flash.sh yocto                # same
 #   ./tools/flash.sh path/to/image.img    # any .img / .wic / .img.xz / .wic.xz
 #   ./tools/flash.sh --inspect            # write nothing: show how far the Pi got booting this card
 #
@@ -53,13 +52,10 @@ run() {  # run a command, or just print it in --dry-run
 newest() { ls -1t "$@" 2>/dev/null | head -1 || true; }
 
 pick_image() {
-    local br="$WORK_DIR/br-output/images/sdcard.img"
     local yo; yo="$(newest "$WORK_DIR"/yocto/build/tmp/deploy/images/raspberrypi5/mylab-image-raspberrypi5*.wic.xz)"
     case "$IMAGE_ARG" in
-        buildroot) IMAGE="$br" ;;
-        yocto)     IMAGE="$yo" ;;
-        "")        IMAGE="$(newest "$br" "$yo")" ;;
-        *)         IMAGE="$IMAGE_ARG" ;;
+        ""|yocto) IMAGE="$yo" ;;
+        *)        IMAGE="$IMAGE_ARG" ;;
     esac
     [[ -n "$IMAGE" && -f "$IMAGE" ]] || die "No image found (${IMAGE_ARG:-auto}). Build first."
     IMAGE="$(readlink -f "$IMAGE")"         # Yocto deploy dir is full of symlinks
@@ -291,7 +287,7 @@ verify_card() {
         local wpa ssid
         wpa="$(sudo find "$mnt/etc/wpa_supplicant.conf" "$mnt/etc/wpa_supplicant/wpa_supplicant-nl80211-wlan0.conf" 2>/dev/null | head -1 || true)"
         if [[ -n "$wpa" ]]; then
-            # br.sh writes "# ssid: <name>" (+ hex ssid=), quick-build.sh writes ssid="<name>".
+            # yocto.sh writes "# ssid: <name>" (+ hex ssid=), quick-build.sh writes ssid="<name>".
             ssid="$(sudo sed -n -e 's/^ *# ssid: //p' -e 's/^ *ssid="\(.*\)"$/\1/p' "$wpa" | head -1 || true)"
             if [[ -z "$ssid" ]]; then
                 warn "rootfs: Wi-Fi config ${wpa#"$mnt"} has NO network${WIFI_SSID:+ (config says '$WIFI_SSID')}"
@@ -314,10 +310,9 @@ verify_card() {
 # Read-only: after the card has been in the Pi, show how far the Pi got.
 # Each boot stage leaves a trace on the card:
 #   ext4 mount count > 0     kernel booted, init remounted / read-write
-#   partition 2 fills card   first-boot resize (S05 / rootfs-expand.service) ran
+#   partition 2 fills card   first-boot resize (rootfs-expand.service) ran
 #   /etc/rootfs-expanded     ...and finished
-#   /etc/ssh/ssh_host_*      sshd started (Buildroot: after S40network / S45wifi)
-#   boot-report.txt          Buildroot S99boot-report ran (60 s after boot)
+#   /etc/ssh/ssh_host_*      sshd started (first boot generates the host keys)
 inspect_card() {
     [[ -b "$DEVICE" ]] || die "$DEVICE is not a block device (lsblk shows what's attached)"
     [[ "$(lsblk -dno TYPE "$DEVICE")" == disk ]] || die "$DEVICE is a partition — pass the whole card, e.g. /dev/sdf"
@@ -356,7 +351,7 @@ inspect_card() {
         else
             warn "No SSH host keys: boot never reached sshd"
         fi
-        [[ -f "$mnt/var/lib/chrony/drift" ]] && ok "chrony drift file exists: NTP synced at some point"
+        [[ -f "$mnt/var/lib/systemd/timesync/clock" ]] && ok "timesyncd clock file exists: NTP synced at some point"
         sudo umount "$mnt"
     else
         warn "Could not mount $p2"
@@ -368,11 +363,6 @@ inspect_card() {
             log "Boot partition files:"; ls -la "$mnt" | sed 's/^/    /'
             log "config.txt:"; grep -v '^\s*#' "$mnt/config.txt" | grep . | sed 's/^/    /' || true
             log "cmdline.txt:"; sed 's/^/    /' "$mnt/cmdline.txt" || true
-        fi
-        if [[ -f "$mnt/boot-report.txt" ]]; then
-            ok "boot-report.txt found:"; echo; cat "$mnt/boot-report.txt"
-        else
-            warn "No boot-report.txt on the boot partition (S99boot-report never ran, or the image predates it)"
         fi
         sudo umount "$mnt"
     fi

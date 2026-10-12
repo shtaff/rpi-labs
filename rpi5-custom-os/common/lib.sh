@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared helpers. Sourced by buildroot/br.sh, yocto/yocto.sh and the tools.
+# Shared helpers. Sourced by yocto/yocto.sh and the tools.
 
 set -Eeuo pipefail
 
@@ -27,8 +27,8 @@ trap 'die "command failed (line $LINENO): $BASH_COMMAND"' ERR
 is_wsl() { grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease 2>/dev/null; }
 
 # WSL appends the Windows PATH ("/mnt/c/Program Files/...") which contains
-# spaces and Windows binaries. Buildroot refuses to run with spaces in PATH and
-# both build systems can pick up the wrong tools, so drop every /mnt/* entry.
+# spaces and Windows binaries. The build can pick up the wrong tools from
+# there, so drop every /mnt/* entry.
 sanitize_path() {
     local IFS=':' p out=()
     for p in $PATH; do
@@ -94,13 +94,12 @@ make_root_hash() {
         [[ -n "$p1" ]] || die "Empty password not allowed"
         ROOT_PASSWORD="$p1"
     fi
-    # shellcheck disable=SC2034  # used by br.sh / yocto.sh
+    # shellcheck disable=SC2034  # used by yocto.sh
     ROOT_HASH="$(openssl passwd -6 -stdin <<<"$ROOT_PASSWORD")"
 }
 
 # Write a wpa_supplicant config for wlan0 to $1 (mode 600).
-# Both flows use it: Buildroot as /etc/wpa_supplicant.conf, Yocto as
-# /etc/wpa_supplicant/wpa_supplicant-nl80211-wlan0.conf.
+# Yocto installs it as /etc/wpa_supplicant/wpa_supplicant-nl80211-wlan0.conf.
 #
 # The SSID is written hex-encoded, so quotes, spaces and non-ASCII characters
 # need no escaping. The passphrase is turned into the 256-bit WPA PSK

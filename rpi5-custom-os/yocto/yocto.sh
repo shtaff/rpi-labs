@@ -7,8 +7,7 @@
 # fetch checks out the exact layer commits in yocto/layers.lock (reproducible);
 # update moves to the branch tips and rewrites the lock file.
 #
-# Analogy vs Buildroot: Buildroot is one recipe card cooked in one pot.
-# Yocto is a restaurant kitchen: many layers of recipes (oe-core, poky,
+# Analogy: Yocto is a restaurant kitchen: many layers of recipes (oe-core, poky,
 # meta-raspberrypi, ours), a scheduler (bitbake) running every task as a job,
 # and a pantry of pre-cooked results (sstate-cache) so rebuilds are fast.
 # More setup, far more control — and far more RAM and disk.

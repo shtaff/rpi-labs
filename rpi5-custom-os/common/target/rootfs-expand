@@ -1,7 +1,7 @@
 #!/bin/sh
 # Grow the root partition and its ext4 filesystem to the end of the disk.
-# Runs once on first boot (Buildroot: /etc/init.d/S05rootfs-expand,
-# Yocto: rootfs-expand.service), then leaves a marker so it is skipped later.
+# Runs once on first boot (rootfs-expand.service), then leaves a marker so
+# it is skipped later.
 #
 # Works while / is mounted, no reboot: sfdisk rewrites only the partition's
 # end, `partx -u` tells the kernel the new size (BLKPG, works on a disk in

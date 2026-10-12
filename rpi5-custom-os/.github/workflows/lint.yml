@@ -1,7 +1,7 @@
 name: lint
 
 # Fast static checks only. A real image build takes hours and ~100 GB, far
-# beyond a hosted runner; build locally with br.sh / yocto.sh.
+# beyond a hosted runner; build locally with yocto.sh.
 on:
   push:
   pull_request:

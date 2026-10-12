@@ -132,7 +132,7 @@ check_host() {
         warn "No wlan0 interface (Wi-Fi driver/firmware not loaded?)"
     fi
 
-    # Clock: NTP (chrony / systemd-timesyncd) should have fixed the battery-less
+    # Clock: NTP (systemd-timesyncd) should have fixed the battery-less
     # RTC within seconds of the network coming up.
     local epoch skew
     epoch="$(sed -n 's/^epoch=//p' <<<"$out")"
@@ -140,7 +140,7 @@ check_host() {
     if (( skew <= 120 )); then
         ok "Clock in sync (off by ${skew}s)"
     else
-        warn "Clock is off by ${skew}s: NTP not working? Buildroot: /etc/init.d/S49chronyd restart; chronyc sources. Yocto: timedatectl timesync-status"
+        warn "Clock is off by ${skew}s: NTP not working? On the Pi: timedatectl timesync-status"
         ((fails++)) || true
     fi
 
