@@ -1,0 +1,37 @@
+# Upstream Yocto layers for rpi5-custom-os, pinned to exact commits by the
+# gitlinks in the tree (what `git submodule status` shows): same commit = same
+# sources = same image. `branch` is only what `./yocto/yocto.sh update`
+# (git submodule update --remote) moves to. `shallow` clones at depth 1, so a
+# checkout costs ~300 MB instead of ~1 GB of history.
+# GitHub URLs: shallow fetch of a pinned commit needs a server that serves
+# commits by hash, which GitHub does.
+[submodule "rpi5-custom-os/yocto/layers/bitbake"]
+	path = rpi5-custom-os/yocto/layers/bitbake
+	url = https://github.com/openembedded/bitbake
+	branch = 2.18
+	shallow = true
+[submodule "rpi5-custom-os/yocto/layers/openembedded-core"]
+	path = rpi5-custom-os/yocto/layers/openembedded-core
+	url = https://github.com/openembedded/openembedded-core
+	branch = wrynose
+	shallow = true
+[submodule "rpi5-custom-os/yocto/layers/meta-yocto"]
+	path = rpi5-custom-os/yocto/layers/meta-yocto
+	url = https://github.com/yoctoproject/meta-yocto
+	branch = wrynose
+	shallow = true
+[submodule "rpi5-custom-os/yocto/layers/meta-raspberrypi"]
+	path = rpi5-custom-os/yocto/layers/meta-raspberrypi
+	url = https://github.com/agherzan/meta-raspberrypi
+	branch = wrynose
+	shallow = true
+[submodule "rpi5-custom-os/yocto/layers/meta-openembedded"]
+	path = rpi5-custom-os/yocto/layers/meta-openembedded
+	url = https://github.com/openembedded/meta-openembedded
+	branch = wrynose
+	shallow = true
+[submodule "rpi5-custom-os/yocto/layers/meta-ros"]
+	path = rpi5-custom-os/yocto/layers/meta-ros
+	url = https://github.com/ros/meta-ros
+	branch = wrynose
+	shallow = true

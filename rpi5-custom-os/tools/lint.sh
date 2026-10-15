@@ -3,7 +3,7 @@
 #   - syntax check and shellcheck on every shell script, host and target side
 #   - LF line endings, and the exec bit recorded in git
 #   - known-answer test for the Wi-Fi PSK derivation (IEEE 802.11i test vector)
-#   - yocto/layers.lock is well-formed
+#   - every upstream layer is a git submodule listed in .gitmodules
 #
 #   ./tools/lint.sh
 
@@ -67,10 +67,15 @@ grep -qx '    ssid=49454545' "$tmp/wpa.conf" || fail "make_wifi_conf: wrong hex 
 grep -qx 'country=US' "$tmp/wpa.conf"       || fail "make_wifi_conf: country not upper-cased"
 rm -rf "$tmp"
 
-log "yocto/layers.lock"
+log "Layer submodules"
+gitmodules="$(git rev-parse --show-toplevel)/.gitmodules"
 for name in bitbake openembedded-core meta-yocto meta-raspberrypi meta-openembedded meta-ros; do
-    awk -v n="$name" '$1 == n && $2 ~ /^[0-9a-f]{40}$/ { found = 1 } END { exit !found }' yocto/layers.lock \
-        || fail "layers.lock: no 40-hex commit for $name"
+    path="yocto/layers/$name"
+    [[ "$(git ls-files -s -- "$path" | cut -d' ' -f1)" == 160000 ]] \
+        || { fail "$path is not a git submodule"; continue; }
+    full="$(git ls-files --full-name -- "$path")"
+    git config -f "$gitmodules" --get-regexp '^submodule\..*\.path$' | grep -qx "submodule\..*\.path $full" \
+        || fail "$path has no entry in .gitmodules"
 done
 
 echo

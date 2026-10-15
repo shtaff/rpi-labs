@@ -2,10 +2,11 @@
 # Yocto (wrynose / 6.0) flow for Raspberry Pi 5 with OpenSSH, Wi-Fi and ROS 2.
 #
 #   ./yocto/yocto.sh all          # fetch -> configure -> build -> export
-#   ./yocto/yocto.sh <step>       # deps | fetch | lock | update | configure | build | shell | export | clean
+#   ./yocto/yocto.sh <step>       # deps | fetch | update | configure | build | shell | export | clean
 #
-# fetch checks out the exact layer commits in yocto/layers.lock (reproducible);
-# update moves to the branch tips and rewrites the lock file.
+# fetch checks out the upstream layers (git submodules in yocto/layers/) at the
+# commits recorded in this repo (reproducible); update moves them to their
+# branch tips, for you to test and commit.
 #
 # Analogy: Yocto is a restaurant kitchen: many layers of recipes (oe-core, poky,
 # meta-raspberrypi, meta-ros, ours), a scheduler (bitbake) running every task as a job,
@@ -16,10 +17,14 @@ source "$(dirname "$0")/../common/lib.sh"
 
 Y="$WORK_DIR/yocto"
 BUILD="$Y/build"
-LAYER_SRC="$REPO_ROOT/yocto/meta-mylab"
-ROS_LAYER_SRC="$REPO_ROOT/yocto/meta-mylab-ros"
-ROS_PKG_SRC="$REPO_ROOT/ros2_ws/src/counter_demo"   # built into the image by counter-demo.bb
-MACHINE="raspberrypi5"
+# Our layers are used in place, straight from the repo.
+MYLAB_LAYER="$REPO_ROOT/yocto/meta-mylab"
+MYLAB_ROS_LAYER="$REPO_ROOT/yocto/meta-mylab-ros"
+# local.conf is created once from this template by oe-init-build-env.
+export TEMPLATECONF="$MYLAB_LAYER/conf/templates/mylab"
+# Your SSH key and Wi-Fi config, found by the recipes as MYLAB_GENERATED_DIR.
+GENERATED="$BUILD/conf/mylab"
+MACHINE="raspberrypi5"   # the template's default; used here for the deploy paths
 IMAGE="mylab-image"
 
 step_deps() {
@@ -37,6 +42,10 @@ step_deps() {
 yocto_preflight() {
     preflight 150 16      # ROS 2 adds ~30 GB to the build
     [[ $EUID -ne 0 ]] || die "Do not build Yocto as root (bitbake refuses)."
+    # The layers (submodules) are checked out inside the repo, so it must be on
+    # the Linux filesystem too: NTFS is slow and case-insensitive.
+    [[ "$(readlink -f "$REPO_ROOT")" != /mnt/* ]] \
+        || die "The repo is on the Windows drive ($REPO_ROOT). Clone it under \$HOME (see README)."
     # Ubuntu 24.04+ blocks unprivileged user namespaces, which bitbake uses to
     # cut tasks off from the network. Usually off in WSL, but check anyway.
     if [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" == 1 ]]; then
@@ -46,163 +55,95 @@ yocto_preflight() {
     export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 }
 
-# Every layer we build from:  name  url  mirror  branch
+# Upstream layers are git submodules in yocto/layers/ (URL and branch in
+# .gitmodules at the git root). The commit this repo records for each one is
+# the lock, like package-lock.json: same commits = same sources = same image,
+# today or in a year. `git submodule status` lists them.
 # bitbake must sit next to openembedded-core: oe-init-build-env finds it there.
-LAYERS=(
-    "bitbake           https://git.openembedded.org/bitbake           https://github.com/openembedded/bitbake           $BITBAKE_BRANCH"
-    "openembedded-core https://git.openembedded.org/openembedded-core https://github.com/openembedded/openembedded-core $YOCTO_RELEASE"
-    "meta-yocto        https://git.yoctoproject.org/meta-yocto        https://github.com/yoctoproject/meta-yocto        $YOCTO_RELEASE"
-    "meta-raspberrypi  https://git.yoctoproject.org/meta-raspberrypi  https://github.com/agherzan/meta-raspberrypi      $YOCTO_RELEASE"
-    "meta-openembedded https://git.openembedded.org/meta-openembedded https://github.com/openembedded/meta-openembedded $YOCTO_RELEASE"
-    "meta-ros          https://github.com/ros/meta-ros                https://github.com/ros/meta-ros                   $YOCTO_RELEASE"
-)
+LAYERS_DIR="$REPO_ROOT/yocto/layers"
 
-# Exact commit per layer, like package-lock.json: same lock file = same sources
-# = same image, today or in a year. `update` moves to the branch tips and
-# rewrites it; commit the file to make that the new baseline.
-LOCK_FILE="$REPO_ROOT/yocto/layers.lock"
-locked_rev() {  # locked_rev <name>  -> commit hash, or nothing
-    [[ "${YOCTO_UNLOCKED:-0}" == 1 || ! -f "$LOCK_FILE" ]] && return 0
-    awk -v n="$1" '$1 == n { print $2 }' "$LOCK_FILE"
-}
-
-clone() {  # clone <name> <url> <mirror-url> <branch>
-    local name="$1" url="$2" mirror="$3" br="$4"
-    local dir="$Y/$name" rev src deepen=()
-    rev="$(locked_rev "$name")"
-    if [[ -n "$rev" && "$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null || true)" == "$rev" ]]; then
-        ok "$name at ${rev:0:12} (locked)"
-        return 0
-    fi
-    [[ -d "$dir/.git" ]] || git init -q "$dir"
-    if [[ "$(git -C "$dir" rev-parse --is-shallow-repository)" == true ]]; then
-        deepen=(--unshallow)
-    fi
-
-    for src in "$url" "$mirror"; do
-        if [[ -z "$rev" ]]; then
-            if git -C "$dir" fetch -q --depth 1 "$src" "$br"; then
-                git -C "$dir" checkout -q --detach FETCH_HEAD
-                ok "$name at ${br} tip $(git -C "$dir" rev-parse --short=12 HEAD) (unlocked)"
-                return 0
-            fi
-        # One commit by hash (most servers allow it), else the whole branch.
-        elif git -C "$dir" fetch -q --depth 1 "$src" "$rev" 2>/dev/null \
-             || git -C "$dir" fetch -q "${deepen[@]}" "$src" "$br"; then
-            if git -C "$dir" cat-file -e "$rev^{commit}" 2>/dev/null; then
-                git -C "$dir" checkout -q --detach "$rev"
-                ok "$name at ${rev:0:12} (locked)"
-                return 0
-            fi
-            warn "$name: commit $rev is not on $br at $src"
-        fi
-        warn "$name: fetch from $src failed, trying the next source"
-    done
-    die "Could not fetch $name ${rev:-$br}"
-}
-
+# Check out every layer at its recorded commit (depth 1). Layers already there
+# are skipped in a second; after a `git pull` that moved one, it is re-fetched.
 step_fetch() {
     yocto_preflight
-    mkdir -p "$Y"
-    log "Fetching layers for Yocto $YOCTO_RELEASE"
-    [[ -f "$LOCK_FILE" || "${YOCTO_UNLOCKED:-0}" == 1 ]] \
-        || warn "No $LOCK_FILE: using branch tips. Run '$0 lock' to pin them."
-    local l name url mirror br
-    for l in "${LAYERS[@]}"; do
-        read -r name url mirror br <<<"$l"
-        clone "$name" "$url" "$mirror" "$br"
-    done
-    [[ -f "$Y/meta-raspberrypi/conf/machine/$MACHINE.conf" ]] || die "No $MACHINE machine in meta-raspberrypi"
-    [[ -f "$Y/meta-ros/meta-ros2-$ROS2_DISTRO/conf/layer.conf" ]] || die "No ROS 2 $ROS2_DISTRO layer in meta-ros ($YOCTO_RELEASE)"
+    log "Fetching layers (git submodules) for Yocto $YOCTO_RELEASE"
+    git -C "$REPO_ROOT" submodule sync -q -- yocto/layers
+    git -C "$REPO_ROOT" submodule update --init --depth 1 -- yocto/layers \
+        || die "git submodule update failed (network down? 'git submodule status' shows what is missing)"
+    git -C "$REPO_ROOT" submodule status -- yocto/layers
+    [[ -f "$LAYERS_DIR/meta-raspberrypi/conf/machine/$MACHINE.conf" ]] || die "No $MACHINE machine in meta-raspberrypi"
+    [[ -f "$LAYERS_DIR/meta-ros/meta-ros2-$ROS2_DISTRO/conf/layer.conf" ]] || die "No ROS 2 $ROS2_DISTRO layer in meta-ros ($YOCTO_RELEASE)"
 }
 
-# Write the commits currently checked out into layers.lock.
-step_lock() {
-    local l name url mirror br
-    {
-        echo "# Exact layer commits for yocto.sh fetch. Regenerate with: ./yocto/yocto.sh update"
-        echo "# name             commit                                    branch"
-        for l in "${LAYERS[@]}"; do
-            read -r name url mirror br <<<"$l"
-            [[ -d "$Y/$name/.git" ]] || die "$name not fetched yet"
-            printf '%-18s %s  %s\n' "$name" "$(git -C "$Y/$name" rev-parse HEAD)" "$br"
-        done
-    } > "$LOCK_FILE"
-    ok "Wrote $LOCK_FILE — commit it so every build uses these exact sources"
-    sed -n '3,$p' "$LOCK_FILE"
-}
-
-# Move every layer to its branch tip and re-lock (the deliberate "upgrade").
+# Move every layer to the tip of its .gitmodules branch (the deliberate "upgrade").
 step_update() {
-    YOCTO_UNLOCKED=1 step_fetch
-    step_lock
-    if git -C "$REPO_ROOT" diff --quiet -- "$LOCK_FILE" 2>/dev/null; then
+    yocto_preflight
+    log "Moving layers to their branch tips"
+    git -C "$REPO_ROOT" submodule update --init --remote --depth 1 -- yocto/layers
+    if git -C "$REPO_ROOT" diff --quiet -- yocto/layers; then
         ok "Already at the branch tips"
     else
-        git -C "$REPO_ROOT" --no-pager diff --stat -- "$LOCK_FILE" 2>/dev/null || true
-        log "Rebuild and test, then commit yocto/layers.lock"
+        git -C "$REPO_ROOT" --no-pager diff -- yocto/layers
+        log "Rebuild and test, then: git add yocto/layers && git commit"
     fi
 }
 
 step_configure() {
     yocto_preflight
-    # Always: brings in layers added to LAYERS / layers.lock since the last
-    # fetch. A layer already at its locked commit is skipped in a second.
+    # Always: brings in layers added or moved since the last fetch (e.g. by a
+    # git pull). A layer already at its recorded commit is skipped in a second.
     step_fetch
     ensure_ssh_key
     make_root_hash
 
-    log "Installing meta-mylab layer (with your public key)"
-    rm -rf "$Y/meta-mylab"
-    cp -a "$LAYER_SRC" "$Y/meta-mylab"
-    install -d "$Y/meta-mylab/recipes-mylab/ssh-root-key/files"
-    install -m 0644 "$SSH_PUBKEY" "$Y/meta-mylab/recipes-mylab/ssh-root-key/files/authorized_keys"
-    make_wifi_conf "$Y/meta-mylab/recipes-mylab/wifi-config/files/wpa_supplicant-nl80211-wlan0.conf"
-    install -m 0755 "$REPO_ROOT/common/target/rootfs-expand" "$Y/meta-mylab/recipes-mylab/rootfs-expand/files/"
+    # Left by older versions of this script: layer copies holding your key and
+    # Wi-Fi PSK, and a local.conf that was rewritten on every run.
+    rm -rf "$Y/meta-mylab" "$Y/meta-mylab-ros"
+    if grep -qs '^# Generated by yocto.sh' "$BUILD/conf/local.conf"; then
+        log "Replacing the old generated local.conf with one from the template"
+        rm -f "$BUILD/conf/local.conf"
+    fi
 
-    log "Installing meta-mylab-ros layer (with ros2_ws/src/counter_demo)"
-    rm -rf "$Y/meta-mylab-ros"
-    cp -a "$ROS_LAYER_SRC" "$Y/meta-mylab-ros"
-    cp -a "$ROS_PKG_SRC" "$Y/meta-mylab-ros/recipes-ros/counter-demo/files/counter_demo"
-    # colcon output, if you built on this machine too, is not part of the source.
-    rm -rf "$Y/meta-mylab-ros/recipes-ros/counter-demo/files/counter_demo/"{build,install,log}
+    # Your data, outside the repo; the recipes find it via MYLAB_GENERATED_DIR.
+    log "Writing your public key and Wi-Fi config to $GENERATED"
+    install -d -m 0700 "$GENERATED"
+    install -m 0644 "$SSH_PUBKEY" "$GENERATED/authorized_keys"
+    make_wifi_conf "$GENERATED/wpa_supplicant-nl80211-wlan0.conf"
 
-    mkdir -p "$BUILD/conf"
+    # Generated rather than templated: the ROS layer depends on ROS2_DISTRO.
     log "Writing $BUILD/conf/bblayers.conf"
     cat > "$BUILD/conf/bblayers.conf" <<EOF
-# Generated by yocto.sh
+# Generated by yocto.sh configure — re-run it instead of hand-editing.
 POKY_BBLAYERS_CONF_VERSION = "2"
 LCONF_VERSION = "7"
 BBPATH = "\${TOPDIR}"
 BBFILES ?= ""
 BBLAYERS ?= " \\
-  $Y/openembedded-core/meta \\
-  $Y/meta-yocto/meta-poky \\
-  $Y/meta-raspberrypi \\
-  $Y/meta-openembedded/meta-oe \\
-  $Y/meta-openembedded/meta-python \\
-  $Y/meta-openembedded/meta-networking \\
-  $Y/meta-ros/meta-ros-common \\
-  $Y/meta-ros/meta-ros2 \\
-  $Y/meta-ros/meta-ros2-$ROS2_DISTRO \\
-  $Y/meta-mylab \\
-  $Y/meta-mylab-ros \\
+  $LAYERS_DIR/openembedded-core/meta \\
+  $LAYERS_DIR/meta-yocto/meta-poky \\
+  $LAYERS_DIR/meta-raspberrypi \\
+  $LAYERS_DIR/meta-openembedded/meta-oe \\
+  $LAYERS_DIR/meta-openembedded/meta-python \\
+  $LAYERS_DIR/meta-openembedded/meta-networking \\
+  $LAYERS_DIR/meta-ros/meta-ros-common \\
+  $LAYERS_DIR/meta-ros/meta-ros2 \\
+  $LAYERS_DIR/meta-ros/meta-ros2-$ROS2_DISTRO \\
+  $MYLAB_LAYER \\
+  $MYLAB_ROS_LAYER \\
   "
 EOF
 
+    # Bitbake reads conf/auto.conf just before local.conf, which stays yours
+    # (created once from the template) and can override anything here.
     # Bitbake expands \${...}; a bare '\$' in the hash must be escaped as '\\\$'.
     local hash_bb="${ROOT_HASH//\$/\\\$}"
-    log "Writing $BUILD/conf/local.conf"
-    cat > "$BUILD/conf/local.conf" <<EOF
-# Generated by yocto.sh — re-run 'configure' instead of hand-editing.
-CONF_VERSION = "2"
-
-MACHINE = "$MACHINE"
-DISTRO = "poky"
-INIT_MANAGER = "systemd"
-# poky already has wifi; stated explicitly because meta-mylab's wifi-config needs it.
-DISTRO_FEATURES:append = " wifi"
-PACKAGE_CLASSES = "package_ipk"
+    log "Writing $BUILD/conf/auto.conf"
+    (
+        umask 077    # it contains the password hash
+        cat > "$BUILD/conf/auto.conf" <<EOF
+# Generated by yocto.sh configure from config.env / config.local.env — re-run
+# it instead of hand-editing. Static settings: local.conf and meta-mylab's
+# distro (conf/distro/mylab.conf).
 
 # Shared caches: survive 'clean', reused by every future build.
 DL_DIR = "$WORK_DIR/yocto-downloads"
@@ -210,32 +151,15 @@ SSTATE_DIR = "$WORK_DIR/yocto-sstate"
 
 BB_NUMBER_THREADS = "$JOBS"
 PARALLEL_MAKE = "-j $JOBS"
-# Delete each recipe's work dir once it's done: saves tens of GB on WSL.
-INHERIT += "rm_work"
-
-# Raspberry Pi specifics (meta-raspberrypi)
-ENABLE_UART = "1"
-# Pi 5 recommends Wi-Fi/BT firmware that carries this licence flag.
-LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"
-# .wic.xz opens directly in Raspberry Pi Imager; .bmap is for bmaptool.
-IMAGE_FSTYPES = "wic.xz wic.bmap"
 
 # MyLab settings consumed by meta-mylab/recipes-core/images/$IMAGE.bb
 hostname:pn-base-files = "$RPI_HOSTNAME"
 MYLAB_ROOT_HASH = "$hash_bb"
 MYLAB_ALLOW_ROOT_PASSWORD_SSH = "$ALLOW_ROOT_PASSWORD_SSH"
-
-# ROS 2 ($ROS2_DISTRO) from meta-ros, added to the image by meta-mylab-ros.
-# meta-ros recipes carry licence names oe-core has no text for (e.g. "BSD"):
-# a warning instead of an error, as in meta-ros' own CI configuration.
-ERROR_QA:remove = "license-exists"
-WARN_QA:append = " license-exists"
-
-USER_CLASSES ?= "buildstats"
-PATCHRESOLVE = "noop"
 EOF
-    chmod 600 "$BUILD/conf/local.conf"
+    )
 
+    # The first run creates local.conf from $TEMPLATECONF.
     log "Checking layer setup"
     with_env bitbake-layers show-layers
     ok "Configured: MACHINE=$MACHINE, image=$IMAGE, hostname=$RPI_HOSTNAME, ROS 2 $ROS2_DISTRO"
@@ -245,7 +169,7 @@ EOF
 with_env() {
     (
         trap - ERR; set +eu     # the OE env script isn't written for strict mode
-        cd "$Y/openembedded-core" || exit 1
+        cd "$LAYERS_DIR/openembedded-core" || exit 1
         # shellcheck disable=SC1091
         source ./oe-init-build-env "$BUILD" >/dev/null || exit 1
         set -e
@@ -255,7 +179,7 @@ with_env() {
 
 step_build() {
     yocto_preflight
-    [[ -f "$BUILD/conf/local.conf" ]] || step_configure
+    [[ -f "$BUILD/conf/auto.conf" ]] || step_configure     # written only by configure
     log "Building $IMAGE for $MACHINE ($JOBS threads). First build: 3-8 h, ~130 GB."
     local t0=$SECONDS
     with_env bitbake "$IMAGE"
@@ -263,26 +187,7 @@ step_build() {
     img="$(ls -1 "$BUILD/tmp/deploy/images/$MACHINE/$IMAGE-$MACHINE"*.wic.xz 2>/dev/null | head -1 || true)"
     [[ -n "$img" ]] || die "No .wic.xz found in $BUILD/tmp/deploy/images/$MACHINE"
     ok "Built in $(( (SECONDS - t0) / 60 )) min: $img"
-
-    # Sanity: what landed in the rootfs?
-    local manifest
-    manifest="$(ls -1 "$BUILD/tmp/deploy/images/$MACHINE/$IMAGE-$MACHINE"*.manifest 2>/dev/null | head -1 || true)"
-    [[ -n "$manifest" ]] || die "No image manifest found"
-    grep -q '^openssh-sshd ' "$manifest"  && ok "openssh-sshd in image"  || die "openssh-sshd missing"
-    grep -q '^ssh-root-key ' "$manifest"  && ok "ssh-root-key in image"  || die "ssh-root-key missing"
-    grep -q '^wpa-supplicant ' "$manifest" && ok "wpa-supplicant in image" || die "wpa-supplicant missing"
-    grep -q '^wifi-config ' "$manifest"   && ok "wifi-config in image"   || die "wifi-config missing"
-    grep -q '^linux-firmware-rpidistro-bcm43455 ' "$manifest" \
-        && ok "CYW43455 Wi-Fi firmware in image" || die "linux-firmware-rpidistro-bcm43455 missing"
-    local pkg
-    for pkg in rootfs-expand avahi-daemon; do
-        grep -q "^$pkg " "$manifest" || die "$pkg missing from the image"
-    done
-    ok "rootfs-expand and avahi-daemon in image (NTP: systemd-timesyncd)"
-    for pkg in ros-core ros2cli demo-nodes-cpp counter-demo ros2-profile; do
-        grep -q "^$pkg " "$manifest" || die "$pkg missing from the image"
-    done
-    ok "ROS 2 $ROS2_DISTRO in image: ros-core, ros2cli, demo-nodes-cpp, counter-demo, ros2-profile"
+    # The package checks run inside bitbake (mylab_check_packages in mylab-image.bb).
 }
 
 step_shell() {
@@ -316,7 +221,6 @@ step_clean() {
 case "${1:-all}" in
     deps)      step_deps ;;
     fetch)     step_fetch ;;
-    lock)      step_lock ;;
     update)    step_update ;;
     configure) step_configure ;;
     build)     step_build ;;
@@ -324,5 +228,5 @@ case "${1:-all}" in
     export)    step_export ;;
     clean)     step_clean ;;
     all)       step_fetch; step_configure; step_build; step_export ;;
-    *) die "Unknown step '$1'. Use: deps fetch lock update configure build shell export clean all" ;;
+    *) die "Unknown step '$1'. Use: deps fetch update configure build shell export clean all" ;;
 esac

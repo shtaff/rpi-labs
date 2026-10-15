@@ -43,3 +43,21 @@ EXTRA_USERS_PARAMS = "usermod -p '${MYLAB_ROOT_HASH}' root;"
 
 # A bit of headroom on the rootfs partition (in KiB).
 IMAGE_ROOTFS_EXTRA_SPACE = "131072"
+
+# .wic.xz opens directly in Raspberry Pi Imager; .bmap is for bmaptool (flash.sh).
+IMAGE_FSTYPES = "wic.xz wic.bmap"
+
+# Sanity check while the rootfs is assembled: packages we rely on that arrive
+# indirectly (an IMAGE_FEATURES entry, a dependency). Missing IMAGE_INSTALL
+# entries already fail the build on their own, so they need no check here.
+MYLAB_REQUIRED_PACKAGES = "openssh-sshd"
+
+python mylab_check_packages() {
+    from oe.rootfs import image_list_installed_packages
+    installed = image_list_installed_packages(d)
+    missing = [p for p in d.getVar('MYLAB_REQUIRED_PACKAGES').split() if p not in installed]
+    if missing:
+        bb.fatal("Missing from %s: %s" % (d.getVar('PN'), " ".join(missing)))
+    bb.note("Required packages present: %s" % d.getVar('MYLAB_REQUIRED_PACKAGES'))
+}
+ROOTFS_POSTPROCESS_COMMAND += "mylab_check_packages"

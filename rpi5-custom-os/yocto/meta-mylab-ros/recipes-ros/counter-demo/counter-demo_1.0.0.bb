@@ -34,8 +34,10 @@ DEPENDS = "${ROS_BUILD_DEPENDS} ${ROS_BUILDTOOL_DEPENDS}"
 # counter_check.sh is a POSIX sh script using sed, grep, mktemp (BusyBox).
 RDEPENDS:${PN} += "${ROS_EXEC_DEPENDS} ${VIRTUAL-RUNTIME_base-utils}"
 
-# files/counter_demo/ is copied in by yocto.sh from ros2_ws/src/counter_demo,
-# the same package you build on the PC with colcon.
+# counter_demo/ comes straight from ros2_ws/src/ in the repo (MYLAB_REPO is set
+# by meta-mylab), the same package you build on the PC with colcon. Bitbake
+# hashes every file in it, so an edit there rebuilds this recipe.
+FILESEXTRAPATHS:prepend = "${MYLAB_REPO}/ros2_ws/src:"
 SRC_URI = " \
     file://counter_demo/ \
     file://counter-demo.service \

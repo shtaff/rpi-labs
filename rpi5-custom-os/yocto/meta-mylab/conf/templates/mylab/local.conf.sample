@@ -1,0 +1,22 @@
+# Build settings. Created once by oe-init-build-env from
+# meta-mylab/conf/templates/mylab/ (TEMPLATECONF); yours to edit, yocto.sh never
+# rewrites it. The values from config.env (hostname, password hash, caches,
+# parallelism) are in conf/auto.conf, rewritten by every `yocto.sh configure`;
+# anything set here wins over auto.conf.
+CONF_VERSION = "2"
+
+MACHINE ?= "raspberrypi5"
+# meta-mylab/conf/distro/mylab.conf: poky + systemd, Wi-Fi, licences.
+DISTRO ?= "mylab"
+# Packages are built as .ipk (opkg): small, and only used to assemble the image.
+PACKAGE_CLASSES ?= "package_ipk"
+
+# Serial console: meta-raspberrypi writes enable_uart=1 into config.txt.
+ENABLE_UART = "1"
+
+# Delete each recipe's work dir once it's done: saves tens of GB on WSL.
+INHERIT += "rm_work"
+# Task timings in tmp/buildstats/.
+USER_CLASSES ?= "buildstats"
+# A failing patch stops the build instead of opening an interactive shell.
+PATCHRESOLVE = "noop"

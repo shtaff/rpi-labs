@@ -12,3 +12,6 @@ IMAGE_INSTALL:append = " \
     counter-demo \
     ros2-profile \
 "
+
+# The ros2 CLI comes in through ros-core: checked by mylab_check_packages.
+MYLAB_REQUIRED_PACKAGES:append = " ros2cli"

@@ -5,7 +5,9 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 inherit systemd features_check
 REQUIRED_DISTRO_FEATURES = "systemd"
 
-# files/rootfs-expand is copied in by yocto.sh from common/target/
+# rootfs-expand comes straight from common/target/ in the repo,
+# rootfs-expand.service from files/.
+FILESEXTRAPATHS:prepend = "${MYLAB_REPO}/common/target:"
 SRC_URI = " \
     file://rootfs-expand \
     file://rootfs-expand.service \
