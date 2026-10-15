@@ -289,9 +289,11 @@ verify_card() {
         else
             warn "rootfs: hostname is '$host' but config says '$RPI_HOSTNAME' — image built with different settings (config.local.env missing on the build machine?)"
         fi
-        local wpa ssid
-        wpa="$(sudo find "$mnt/etc/wpa_supplicant.conf" "$mnt/etc/wpa_supplicant/wpa_supplicant-nl80211-wlan0.conf" 2>/dev/null | head -1 || true)"
-        if [[ -n "$wpa" ]]; then
+        # The file wpa_supplicant-nl80211@wlan0.service reads (installed by
+        # wifi-config.bb). Not /etc/wpa_supplicant.conf: that's the package's
+        # unused sample, with no network in it.
+        local wpa="$mnt/etc/wpa_supplicant/wpa_supplicant-nl80211-wlan0.conf" ssid
+        if sudo test -f "$wpa"; then   # mode 600, root-owned
             # yocto.sh writes "# ssid: <name>" (+ hex ssid=), quick-build.sh writes ssid="<name>".
             ssid="$(sudo sed -n -e 's/^ *# ssid: //p' -e 's/^ *ssid="\(.*\)"$/\1/p' "$wpa" | head -1 || true)"
             if [[ -z "$ssid" ]]; then
@@ -302,7 +304,7 @@ verify_card() {
                 ok "rootfs: Wi-Fi config ${wpa#"$mnt"} (network: $ssid)"
             fi
         else
-            warn "rootfs: no wpa_supplicant config found"
+            warn "rootfs: no ${wpa#"$mnt"} (image built without wifi-config?)"
         fi
         sudo umount "$mnt"
     else
